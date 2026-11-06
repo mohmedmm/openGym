@@ -382,6 +382,12 @@ export default function Teams() {
                       إدارة البرنامج والتخصيص الفردي
                     </button>
                     <button
+                      onClick={() => { localStorage.setItem('gym_plan_view', 'team_schedule'); nav('/plan'); }}
+                      style={{ padding: '10px 14px', borderRadius: 10, background: 'var(--surface-2)', color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer', fontWeight: 600 }}
+                    >
+                      جدول الفريق
+                    </button>
+                    <button
                       onClick={() => nav(`/coach/live?teamId=${team.id}`)}
                       style={{ padding: '10px 14px', borderRadius: 10, background: 'var(--surface-2)', color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}
                     >
@@ -449,12 +455,18 @@ export default function Teams() {
 
                   <hr style={{ border: 'none', borderTop: '1px solid var(--sep-op)', margin: '14px 0' }} />
 
-                  <div style={{ display: 'flex', gap: 10 }}>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                     <button
                       onClick={() => nav('/workout')}
-                      style={{ flex: 1, padding: '10px 14px', borderRadius: 10, background: 'var(--acc)', color: 'var(--on-acc)', border: 'none', fontWeight: 700, cursor: 'pointer' }}
+                      style={{ flex: 1, minWidth: 160, padding: '10px 14px', borderRadius: 10, background: 'var(--acc)', color: 'var(--on-acc)', border: 'none', fontWeight: 700, cursor: 'pointer' }}
                     >
                       بدء تمرين اليوم المخصص لي
+                    </button>
+                    <button
+                      onClick={() => { localStorage.setItem('gym_plan_view', 'team_schedule'); nav('/plan'); }}
+                      style={{ padding: '10px 14px', borderRadius: 10, background: 'var(--surface-2)', color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer', fontWeight: 600 }}
+                    >
+                      جدول الفريق
                     </button>
                     <button
                       onClick={() => nav(`/chat?type=team&id=${team.id}`)}

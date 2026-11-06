@@ -143,6 +143,53 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
     sendJson(res, 200, { success: true, plan });
   };
 
+  routes['DELETE /api/teams/plan'] = async (req, res) => {
+    const user = await getUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
+    const url = new URL(req.url, 'http://localhost');
+    const planId = url.searchParams.get('planId') || url.searchParams.get('id');
+    if (!planId) return sendJson(res, 400, { error: 'planId required' });
+
+    const planOwner = await db.getTeamPlanOwner(planId);
+    if (!planOwner) return sendJson(res, 404, { error: 'Plan not found' });
+    if (planOwner.head_coach_uid !== user.id && !isAdmin(user)) {
+      return sendJson(res, 403, { error: 'Only coach can delete team plan' });
+    }
+
+    await db.deleteTeamPlan(planId);
+    sendJson(res, 200, { success: true });
+  };
+
+  // 5.5 TEAM SCHEDULE (GET & UPDATE)
+  routes['GET /api/teams/schedule'] = async (req, res) => {
+    const user = await getUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
+    const url = new URL(req.url, 'http://localhost');
+    const teamId = url.searchParams.get('teamId');
+    if (!teamId) return sendJson(res, 400, { error: 'teamId required' });
+
+    const team = await db.getTeamDetails(teamId);
+    if (!team) return sendJson(res, 404, { error: 'Team not found' });
+    sendJson(res, 200, { schedule: team.schedule_json || {}, team_name: team.name, is_coach: team.head_coach_uid === user.id || isAdmin(user) });
+  };
+
+  routes['POST /api/teams/schedule'] = async (req, res) => {
+    const user = await getUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
+    const body = await readBody(req);
+    const teamId = body.team_id || body.teamId;
+    if (!teamId) return sendJson(res, 400, { error: 'teamId required' });
+
+    const team = await db.getTeamDetails(teamId);
+    if (!team) return sendJson(res, 404, { error: 'Team not found' });
+    if (team.head_coach_uid !== user.id && !isAdmin(user)) {
+      return sendJson(res, 403, { error: 'Only head coach can edit team schedule' });
+    }
+
+    const updated = await db.updateTeamSchedule(teamId, body.schedule || {});
+    sendJson(res, 200, { success: true, schedule: updated?.schedule_json || {} });
+  };
+
   // 6. PLAN OVERRIDES
   routes['GET /api/teams/plan/overrides'] = async (req, res) => {
     const user = await getUser(req);

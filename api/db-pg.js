@@ -390,6 +390,35 @@ export async function joinTeamByCode(uid, inviteCode) {
   return { team, member: mem, already_member: false };
 }
 
+export async function updateTeamSchedule(teamId, scheduleJson) {
+  if (pool) {
+    const res = await pool.query(
+      'UPDATE gym_teams SET schedule_json = $1 WHERE id = $2 RETURNING *',
+      [JSON.stringify(scheduleJson), teamId]
+    );
+    return res.rows[0] || null;
+  }
+  const db = loadFallbackData();
+  const team = db.teams.find(t => t.id === teamId);
+  if (!team) return null;
+  team.schedule_json = scheduleJson;
+  saveFallbackData();
+  return team;
+}
+
+export async function deleteTeamPlan(planId) {
+  if (pool) {
+    await pool.query('DELETE FROM gym_member_plan_overrides WHERE team_plan_id = $1', [planId]);
+    await pool.query('DELETE FROM gym_team_plans WHERE id = $1', [planId]);
+    return true;
+  }
+  const db = loadFallbackData();
+  db.member_plan_overrides = db.member_plan_overrides.filter(o => o.team_plan_id !== planId);
+  db.team_plans = db.team_plans.filter(p => p.id !== planId);
+  saveFallbackData();
+  return true;
+}
+
 // ----------------- TEAM PLANS & INDIVIDUAL OVERRIDES -----------------
 export async function saveTeamPlan({ id, team_id, name, description, days_json }) {
   const now = Date.now();

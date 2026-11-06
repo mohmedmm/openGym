@@ -6,7 +6,7 @@ import { DAYN, DAYS, weekOrder, weekStartOf, uid, exCount, routineCount, todayIS
 import { t } from '../lib/i18n.js'
 import {
   dayAssignSheet, starterPlanSheet, confirmSheet, menuSheet,
-  planHasRoutines, exportPlanFile, printWholePlan, importPlanFile,
+  planHasRoutines, exportPlanFile, printWholePlan, importPlanFile, startFlow
 } from '../sheets.jsx'
 import Icon from '../components/Icon.jsx'
 import EmptyState from '../components/EmptyState.jsx'
@@ -32,47 +32,44 @@ import {
 } from '../lib/rotation.js'
 import { isOn } from '../lib/modules.js'
 
-// Plan has two views (v1.3.11): Schedule (how you train, and when) and Routines (what you
-// train). The last one you looked at comes back: a per-device convenience, never synced, so it
-// lives in this browser's storage and not in S.
+export const ARABIC_WEEKDAYS = [
+  { id: 6, name: 'السبت' },
+  { id: 0, name: 'الأحد' },
+  { id: 1, name: 'الاثنين' },
+  { id: 2, name: 'الثلاثاء' },
+  { id: 3, name: 'الأربعاء' },
+  { id: 4, name: 'الخميس' },
+  { id: 5, name: 'الجمعة' }
+]
+
 export const PLAN_VIEW_KEY = 'gym_plan_view'
 const readView = () => {
-  try { return localStorage.getItem(PLAN_VIEW_KEY) === 'routines' ? 'routines' : 'schedule' } catch { return 'schedule' }
+  try {
+    const v = localStorage.getItem(PLAN_VIEW_KEY)
+    if (['schedule', 'team_schedule', 'routines', 'teams'].includes(v)) return v
+    return 'schedule'
+  } catch { return 'schedule' }
 }
 
-/* Undo for Plan's two removals (v1.3.11). Both go through the store's normal update, so sync
-   sees an ordinary edit (a routine put back clears its own removal stamp, lib/sync-merge.js). */
-
-/** Deletes a routine with an Undo toast in place of a confirm: the toast puts it back exactly,
- *  list place, weekdays, reschedules and loop included (lib/routines.js routineSnapshot). */
 export function deleteRoutineWithUndo(id) {
   const st = useStore.getState()
   const snap = routineSnapshot(st.S, id)
   if (!snap) return false
   const before = st.S
   st.update(s => { deleteRoutine(s, id) })
-  // What the removal moved (weekdays, reschedules, the loop), for the Undo to mark as put back:
-  // a change another device made to one of them before it saw the removal then still wins.
   snap.marks = undoMarks(before, useStore.getState().S)
   useUI.getState().toast(t('“{0}” gone.', snap.routine.name), { action: t('Undo'), onAction: () => undoDeleteRoutine(snap) })
   return true
 }
+
 export function undoDeleteRoutine(snap) {
   let ok = false
   useStore.getState().update(s => { ok = restoreRoutine(s, snap); if (ok && snap.marks) markUndone(s, snap.marks) })
-  // False when a sync brought it back first (another device's Undo, or its later edit).
   if (!ok) useUI.getState().toast(t('It’s already back.'))
   return ok
 }
 
-/** Takes a routine out of the loop (the swipe and the edit-mode minus), with an Undo. The removal
- *  is the editor's own (`setSeq`), which may sweep the routine's future pins or roll a finished
- *  round over; so while the loop is still what the removal left, Undo puts the loop, the round and
- *  the swept pins back as they were. Once something else changed the loop, it just slots the
- *  routine back in at its old place, through the same save an edit uses. */
 export function takeOutOfLoop(idOrAt, setSeq, seq, label) {
-  // By position: a loop may hold a routine twice, or several rest days (#536). An id means its
-  // first place, as before.
   const at = typeof idOrAt === 'number' ? idOrAt : seq.indexOf(idOrAt)
   if (at < 0 || at >= seq.length) return false
   const id = seq[at]
@@ -86,7 +83,7 @@ export function takeOutOfLoop(idOrAt, setSeq, seq, label) {
   useUI.getState().toast(t('“{0}” is out of the loop.', name), { action: t('Undo'), onAction: () => undoTakeOut({ id, at, label, snap, mark, marks }) })
   return true
 }
-// What the loop looked like right after a removal: the saved loop, the pass and the mode switch.
+
 const loopMark = S => JSON.stringify([S.rotation ?? null, S.queue ?? null, S.scheduleMode ?? null])
 export function undoTakeOut({ id, at, label, snap, mark, marks }) {
   if (id !== REST && !useStore.getState().S.routines.some(r => r.id === id)) {
@@ -99,13 +96,9 @@ export function undoTakeOut({ id, at, label, snap, mark, marks }) {
       s.queue = snap.queue
       const pins = Object.entries(snap.dayPlan).filter(([iso]) => s.dayPlan?.[iso] == null)
       if (pins.length) s.dayPlan = { ...(s.dayPlan || {}), ...Object.fromEntries(pins) }
-      // Put back exactly: a reorder another device made before it saw the removal still wins.
       if (marks) markUndone(s, marks)
       return
     }
-    // Only a loop that is still this app's and still running gets a pass written. After "Fixed
-    // week", or with a coach's or planner's queue in charge, a new pass would quietly take over
-    // again, so the routine just goes back into the saved loop for the next time it starts.
     const q = queueOf(s)
     const ours = scheduleModeOf(s) === 'rotation' && (!s.queue || (!!q && !!s.rotation && q.rotationId === s.rotation.id))
     if (!ours) {
@@ -128,7 +121,6 @@ export function undoTakeOut({ id, at, label, snap, mark, marks }) {
   return true
 }
 
-// The flash a row lands with when a swipe brought it (a duplicate, an undo): one per new value.
 let flashSeq = 0
 
 export default function Plan() {
@@ -142,17 +134,11 @@ export default function Plan() {
   const [view, setViewState] = useState(readView)
   const setView = v => {
     setViewState(v)
-    try { localStorage.setItem(PLAN_VIEW_KEY, v) } catch { /* private mode: the view just isn't remembered */ }
+    try { localStorage.setItem(PLAN_VIEW_KEY, v) } catch { }
   }
 
-  /* The Coach's way in from Plan: its own button in the header (a banner over the week was too
-     loud, the last entry of the share menu too hidden). Gated by the same predicate every other
-     Coach surface uses, so an instance without the feature sees exactly the header it would have
-     without it. */
   const showCoach = isOn(S, 'coach') && coachAvailable(config, user, { demo: DEMO, mobile: MOBILE, coachMode })
 
-  // Share, print, import and starter plans: one menu behind the header button, so the
-  // two views below are only about the plan itself.
   const openMenu = () => {
     const has = planHasRoutines(S)
     menuSheet({
@@ -170,260 +156,823 @@ export default function Plan() {
   const pickFile = ev => { const f = ev.target.files[0]; ev.target.value = ''; importPlanFile(f) }
 
   const mode = scheduleModeOf(S)
-  // A running programme wrote the schedule below (lib/programmes.js); the strip says whose it is.
   const progChip = programmeChip(S)
 
-  return <div className="narrow plan">
+  return <div className="narrow plan" style={{ direction: 'rtl' }}>
     <div className="hdr">
       <SeasonDeco spot="header-bats" />
-      <div><h1>{t('Plan')}</h1><div className="sub">{mode === 'rotation' ? t('Your routines in a loop') : t('Your weekly routine')}</div></div>
+      <div>
+        <h1 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 700 }}>
+          {view === 'team_schedule' ? 'جدول الفريق' : view === 'teams' ? 'خطط وقوالب الفريق' : view === 'routines' ? 'خطط منفردة' : 'الجدول الشخصي'}
+        </h1>
+        <div className="sub" style={{ fontSize: '0.85rem', color: 'var(--label-2)', marginTop: 4 }}>
+          {view === 'team_schedule'
+            ? 'جدول تمارين الفريق الأسبوعي المعتمد من المدرب'
+            : view === 'teams'
+            ? 'إدارة القوالب الجماعية والتخصيص الفردي'
+            : view === 'routines'
+            ? 'خططك وتمارينك المنفردة المستقلة'
+            : 'أيام تمرينك واستشفائك الأسبوعية'}
+        </div>
+      </div>
       <div className="hdr-actions">
         {showCoach && <Button size="sm" variant="tinted" icon="sparkles" onClick={() => nav('/coach')}>{t('Coach')}</Button>}
-        <button className="iconbtn" data-tour="plan-menu" onClick={openMenu} aria-label={t('Plan options')} title={t('Plan options')}><Icon name="share" /></button>
+        <button className="iconbtn" data-tour="plan-menu" onClick={openMenu} aria-label={t('Plan options')} title={t('Plan options')}>
+          <Icon name="share" />
+        </button>
       </div>
     </div>
     <input ref={fileRef} type="file" accept="application/json,.json" onChange={pickFile} hidden />
+
     <Segmented className="plan-views" tour="plan-views" value={view} onChange={setView}
       options={[
-        { value: 'schedule', label: t('Schedule') || 'الجدول' },
+        { value: 'schedule', label: 'الجدول الشخصي' },
+        { value: 'team_schedule', label: 'جدول الفريق' },
         { value: 'routines', label: 'خطط منفردة' },
-        { value: 'teams', label: 'خطط الفريق' }
+        { value: 'teams', label: 'خطط وقوالب الفريق' }
       ]} />
+
     {progChip && <button type="button" className="prog-strip" onClick={() => nav('/plan/programmes')}>
       <Icon name="calendar" /><span className="grow">{S.programmes?.[S.programme?.id]?.name || t('Programme')}</span><span className="tag acc">{progChip}</span>
     </button>}
-    {view === 'teams'
+
+    {view === 'team_schedule'
+      ? <TeamScheduleHub S={S} update={update} nav={nav} />
+      : view === 'teams'
       ? <TeamPlansHub S={S} update={update} nav={nav} />
       : view === 'routines'
       ? <Routines S={S} update={update} nav={nav} />
-      : <Schedule S={S} update={update} nav={nav} mode={mode} />}
+      : <PersonalSchedule S={S} update={update} nav={nav} mode={mode} />}
   </div>
 }
 
-/* ================================ Schedule ================================ */
+/* ================================ 1. Personal Schedule ================================ */
 
-function Schedule({ S, update, nav, mode }) {
-  const [editLoop, setEditLoop] = useState(false)
-  /* The rotation editor. What it shows is the live pass when there is one, otherwise the saved
-     sequence — S.rotation is only a definition, so the pass is the truth whenever it exists.
-     Every edit writes straight through saveRotation: an edit IS the save (and, for a queue
-     somebody else wrote, the adoption), so there is no half-edited state to lose. `since` and
-     `startsOn` carry over, so progress already logged survives a reorder. */
-  const liveQ = queueOf(S)
-  // A loop with rest days or a routine twice (#536) is edited as the whole saved sequence; its
-  // pass is only the running segment of it. A simple loop shows its pass, as it always has.
-  const fullSeq = sequenceOf(S)
-  const ownLoop = !liveQ || (!!S.rotation && liveQ.rotationId === S.rotation.id)
-  const looped = ownLoop && fullSeq.length > 0 && !isSimpleSequence(fullSeq)
-  const seq = looped ? fullSeq : liveQ?.ids ?? rotationIds(S)
-  const seg = looped && liveQ ? segmentAt(fullSeq, S.rotation?.at) : null
-  // A loop the app makes has no name of its own: Home shows it as 'Rotation' in the language on
-  // screen. Stored as text, it stayed in the language it was made in (QA 2026-10-06).
-  const seqLabel = liveQ?.label || S.rotation?.label || ''
-  // Ownership, not presence: a planner's queue has no rotationId, or one that does not match the
-  // saved rotation here — that's what makes it someone else's to write, not this app's.
-  const managed = !!liveQ && !!S.rotation && liveQ.rotationId === S.rotation.id
-  const external = !!liveQ && !managed
-  const recovery = queueRecovery(S)
-  const qv = liveQ ? queueView(S, todayISO()) : null
+function PersonalSchedule({ S, update, nav, mode }) {
+  const [assigningDay, setAssigningDay] = useState(null)
+  const [showRotationLoop, setShowRotationLoop] = useState(false)
+  const toast = useUI(s => s.toast)
+  const todayDow = new Date().getDay()
 
-  // "How you train" is the same switch as Settings' (lib/rotation.js chooseRotation /
-  // chooseFixedWeek), on the same keys. Leaving a running loop asks first: its progress goes,
-  // the loop itself and the weekdays stay. With nothing running there is nothing to lose.
-  const setMode = v => {
-    if (v === mode) return
-    if (v === 'rotation') { update(s => { chooseRotation(s) }); return }
-    if (!liveQ) { update(s => { chooseFixedWeek(s) }); return }
-    confirmSheet({
-      title: t('Back to a fixed week?'),
-      message: t('The loop stops. Your weekdays stay as they are, and the loop is saved for later.'),
-      confirmText: t('Use Fixed Week'),
-      onConfirm: () => update(s => { chooseFixedWeek(s) }),
+  const routineOf = id => S.routines.find(x => x.id === id)
+  const dayRoutines = d => [].concat(S.week[d] || []).map(routineOf).filter(Boolean)
+
+  function assignRoutineToDay(dayId, routineId) {
+    update(s => {
+      if (!routineId) {
+        delete s.week[dayId]
+      } else {
+        s.week[dayId] = [routineId]
+      }
+    })
+    setAssigningDay(null)
+    toast('تم تحديث جدولك الشخصي بنجاح!')
+  }
+
+  function handleCreateAndAssign(dayId) {
+    const dayObj = ARABIC_WEEKDAYS.find(w => w.id === dayId)
+    const dayName = dayObj ? dayObj.name : 'اليوم'
+    const r = { id: uid(), name: `روتين ${dayName}`, emoji: DEFAULT_GLYPH, ex: [] }
+    update(s => {
+      s.routines.push(r)
+      s.week[dayId] = [r.id]
+    })
+    setAssigningDay(null)
+    nav('/plan/r/' + r.id)
+  }
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--label)' }}>
+            جدولك الأسبوعي الشخصي
+          </h3>
+          <span style={{ fontSize: '0.8rem', color: 'var(--label-2)' }}>
+            حدد الروتين والتمارين لكل يوم من أيام الأسبوع، أو اختر يوم راحة واستشفاء
+          </span>
+        </div>
+      </div>
+
+      {/* 7 DAYS LIST */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18 }}>
+        {ARABIC_WEEKDAYS.map(day => {
+          const rs = dayRoutines(day.id)
+          const isToday = day.id === todayDow
+          const hasWorkout = rs.length > 0
+
+          return (
+            <div
+              key={day.id}
+              style={{
+                background: 'var(--surface)',
+                borderRadius: 14,
+                border: isToday ? '1px solid var(--acc)' : '1px solid var(--sep-op)',
+                padding: '14px 16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+                position: 'relative'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{
+                    fontWeight: 700,
+                    fontSize: '1rem',
+                    color: isToday ? 'var(--acc)' : 'var(--label)'
+                  }}>
+                    {day.name}
+                  </span>
+                  {isToday && (
+                    <span style={{
+                      padding: '2px 8px',
+                      borderRadius: 6,
+                      background: 'rgba(52, 199, 89, 0.15)',
+                      color: 'var(--green)',
+                      fontSize: '0.75rem',
+                      fontWeight: 700
+                    }}>
+                      اليوم
+                    </span>
+                  )}
+                </div>
+
+                {hasWorkout ? (
+                  <span style={{ fontSize: '0.8rem', color: 'var(--label-2)' }}>
+                    {rs.reduce((acc, r) => acc + (r.ex?.length || 0), 0)} تمرين
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '0.8rem', color: 'var(--label-3)' }}>
+                    راحة واستشفاء
+                  </span>
+                )}
+              </div>
+
+              {hasWorkout ? (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--label)' }}>
+                      {rs.map(r => r.name).join(' + ')}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => startFlow(rs.map(r => r.id))}
+                      style={{
+                        padding: '6px 14px', borderRadius: 8, background: 'var(--acc)',
+                        color: '#fff', border: 'none', fontWeight: 600, fontSize: '0.8rem', cursor: 'pointer'
+                      }}
+                    >
+                      بدء التمرين الآن
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => nav('/plan/r/' + rs[0].id)}
+                      style={{
+                        padding: '6px 12px', borderRadius: 8, background: 'var(--surface-2)',
+                        color: 'var(--label)', border: '1px solid var(--sep-op)', fontSize: '0.8rem', cursor: 'pointer'
+                      }}
+                    >
+                      تعديل التمارين
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setAssigningDay(day)}
+                      style={{
+                        padding: '6px 12px', borderRadius: 8, background: 'var(--surface-2)',
+                        color: 'var(--label)', border: '1px solid var(--sep-op)', fontSize: '0.8rem', cursor: 'pointer'
+                      }}
+                    >
+                      تغيير الروتين
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => assignRoutineToDay(day.id, null)}
+                      style={{
+                        padding: '6px 10px', borderRadius: 8, background: 'transparent',
+                        color: 'var(--label-3)', border: 'none', fontSize: '0.8rem', cursor: 'pointer'
+                      }}
+                    >
+                      إلغاء (راحة)
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--label-2)' }}>
+                    لا توجد تمارين محددة لهذا اليوم
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAssigningDay(day)}
+                    style={{
+                      padding: '6px 14px', borderRadius: 8, background: 'var(--surface-2)',
+                      color: 'var(--label)', border: '1px solid var(--sep-op)', fontSize: '0.8rem',
+                      fontWeight: 600, cursor: 'pointer'
+                    }}
+                  >
+                    + تعيين روتين لهذا اليوم
+                  </button>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* QUICK ADD ROUTINE */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <button
+          type="button"
+          onClick={() => {
+            const r = { id: uid(), name: 'روتين جديد', emoji: DEFAULT_GLYPH, ex: [] }
+            update(s => { s.routines.push(r) })
+            nav('/plan/r/' + r.id)
+          }}
+          style={{
+            padding: '10px 16px', borderRadius: 10, background: 'var(--surface-2)',
+            color: 'var(--label)', border: '1px solid var(--sep-op)', fontWeight: 600,
+            fontSize: '0.85rem', cursor: 'pointer'
+          }}
+        >
+          + إضافة روتين جديد وتعديل تمارينه
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowRotationLoop(!showRotationLoop)}
+          style={{
+            background: 'transparent', border: 'none', color: 'var(--label-2)',
+            fontSize: '0.85rem', cursor: 'pointer'
+          }}
+        >
+          {showRotationLoop ? 'إخفاء نظام التكرار الدوري' : 'عرض نظام التكرار الدوري (Rotation)'}
+        </button>
+      </div>
+
+      {/* ROTATION LOOP OPTION IF EXPANDED */}
+      {showRotationLoop && (
+        <div style={{ background: 'var(--surface-2)', padding: 16, borderRadius: 14, marginBottom: 20, border: '1px solid var(--sep-op)' }}>
+          <h4 style={{ margin: '0 0 8px 0', fontSize: '0.95rem', color: 'var(--label)' }}>
+            نظام التكرار الدوري (Rotation Loop)
+          </h4>
+          <p style={{ margin: '0 0 12px 0', fontSize: '0.8rem', color: 'var(--label-2)', lineHeight: 1.5 }}>
+            يتيح لك ترتيب روتين التدريب في حلقة متتابعة بغض النظر عن أيام الأسبوع الثابتة، بحيث ينتقل التمرين التالي تلقائياً عند إكمال الحصة.
+          </p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button size="sm" variant={mode === 'week' ? 'primary' : 'tinted'} onClick={() => update(s => { chooseFixedWeek(s) })}>
+              الجدول الأسبوعي الثابت
+            </Button>
+            <Button size="sm" variant={mode === 'rotation' ? 'primary' : 'tinted'} onClick={() => update(s => { chooseRotation(s) })}>
+              تفعيل التكرار الدوري
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ASSIGN ROUTINE TO DAY */}
+      {assigningDay && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16
+        }}>
+          <div style={{
+            background: 'var(--surface)', padding: 20, borderRadius: 16,
+            maxWidth: 420, width: '100%', border: '1px solid var(--sep-op)', direction: 'rtl'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--label)' }}>
+                تعيين روتين ليوم {assigningDay.name}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setAssigningDay(null)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--label-2)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                aria-label="Close"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 300, overflowY: 'auto', marginBottom: 16 }}>
+              <button
+                type="button"
+                onClick={() => assignRoutineToDay(assigningDay.id, null)}
+                style={{
+                  padding: '12px 14px', borderRadius: 10, background: 'var(--surface-2)',
+                  color: 'var(--label)', border: '1px solid var(--sep-op)', textAlign: 'right',
+                  cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem'
+                }}
+              >
+                يوم راحة واستشفاء (تفريغ اليوم)
+              </button>
+
+              {S.routines.map(r => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => assignRoutineToDay(assigningDay.id, r.id)}
+                  style={{
+                    padding: '12px 14px', borderRadius: 10, background: 'var(--surface)',
+                    color: 'var(--label)', border: '1px solid var(--sep-op)', textAlign: 'right',
+                    cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                  }}
+                >
+                  <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{r.name}</span>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--label-2)' }}>{r.ex?.length || 0} تمرين</span>
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => handleCreateAndAssign(assigningDay.id)}
+              style={{
+                width: '100%', padding: '10px', borderRadius: 10, background: 'var(--acc)',
+                color: '#fff', border: 'none', fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer'
+              }}
+            >
+              + إنشاء روتين جديد وتعيينه فوراً لهذا اليوم
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ================================ 2. Team Schedule Hub ================================ */
+
+function TeamScheduleHub({ S, update, nav }) {
+  const [teams, setTeams] = useState([])
+  const [selectedTeamId, setSelectedTeamId] = useState('')
+  const [schedule, setSchedule] = useState({})
+  const [teamPlans, setTeamPlans] = useState([])
+  const [isCoach, setIsCoach] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [editingDay, setEditingDay] = useState(null)
+  const [sessionName, setSessionName] = useState('')
+  const [sessionNotes, setSessionNotes] = useState('')
+  const [sourcePlanId, setSourcePlanId] = useState('')
+  const [sourceRoutineId, setSourceRoutineId] = useState('')
+  const toast = useUI(s => s.toast)
+  const todayDow = new Date().getDay()
+
+  useEffect(() => {
+    fetch('/api/teams')
+      .then(r => r.ok ? r.json() : { teams: [] })
+      .then(d => {
+        const tms = d.teams || []
+        setTeams(tms)
+        if (tms.length > 0) {
+          setSelectedTeamId(tms[0].id)
+        } else {
+          setLoading(false)
+        }
+      })
+      .catch(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    if (!selectedTeamId) return
+    loadTeamSchedule(selectedTeamId)
+  }, [selectedTeamId])
+
+  async function loadTeamSchedule(teamId) {
+    setLoading(true)
+    try {
+      const [schedRes, detailsRes] = await Promise.all([
+        fetch(`/api/teams/schedule?teamId=${teamId}`),
+        fetch(`/api/teams/details?teamId=${teamId}`)
+      ])
+      if (schedRes.ok) {
+        const d = await schedRes.json()
+        setSchedule(d.schedule || {})
+        setIsCoach(!!d.is_coach)
+      }
+      if (detailsRes.ok) {
+        const det = await detailsRes.json()
+        setTeamPlans(det.team?.plans || [])
+      }
+    } catch (e) {
+      console.warn('Error loading team schedule:', e)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function saveDayAssignment(dayId, sessionData) {
+    const updated = { ...schedule, [dayId]: sessionData }
+    try {
+      const res = await fetch('/api/teams/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team_id: selectedTeamId, schedule: updated })
+      })
+      if (res.ok) {
+        setSchedule(updated)
+        toast('تم تحديث جدول الفريق بنجاح!')
+        setEditingDay(null)
+      } else {
+        toast('تعذر حفظ جدول الفريق')
+      }
+    } catch (e) {
+      toast('خطأ في الاتصال بالخادم')
+    }
+  }
+
+  function handleOpenEditDay(day) {
+    setEditingDay(day)
+    const existing = schedule[day.id] || {}
+    setSessionName(existing.name || '')
+    setSessionNotes(existing.notes || '')
+    setSourcePlanId(existing.plan_id || '')
+    setSourceRoutineId('')
+  }
+
+  function handleSaveDayModal(e) {
+    e.preventDefault()
+    if (!editingDay) return
+    let exercises = []
+    let name = sessionName.trim()
+
+    if (sourcePlanId) {
+      const plan = teamPlans.find(p => p.id === sourcePlanId)
+      if (plan) {
+        name = name || plan.name
+        if (Array.isArray(plan.days_json)) {
+          plan.days_json.forEach(d => {
+            if (Array.isArray(d.exercises)) exercises.push(...d.exercises)
+          })
+        }
+      }
+    } else if (sourceRoutineId) {
+      const routine = S.routines.find(r => r.id === sourceRoutineId)
+      if (routine) {
+        name = name || routine.name
+        exercises = routine.ex.map(ex => ({ id: ex.id, name: ex.id, sets: ex.sets?.length || 3, reps: '8-10' }))
+      }
+    }
+
+    if (!name) name = `حصة تدريبية ليوم ${editingDay.name}`
+
+    saveDayAssignment(editingDay.id, {
+      name,
+      exercises,
+      notes: sessionNotes.trim(),
+      plan_id: sourcePlanId || null,
+      rest: false
     })
   }
 
-  const setSeq = ids => update(s => {
-    // Emptying the sequence stops the pass but stays on Rotation with an empty loop ('No rotation
-    // yet'), so taking out the last routine to swap it for another never throws you onto the
-    // weekday grid. Leaving the rotation is the 'How you train' switch's job.
-    if (ids.length) saveRotation(s, ids, seqLabel)
-    else {
-      stopPass(s)
-      if (s.rotation) s.rotation = { ...s.rotation, sequence: [] }
-      s.scheduleMode = 'rotation'
-    }
-  })
-  const loopReorder = useListReorder(seq.length, (from, to) => setSeq(moved(seq, from, to)))
-  const takeOut = at => takeOutOfLoop(at, setSeq, seq, seqLabel)
-  const swipe = workoutControls(S).swipeSets && !external
-  // Any routine, also one already in the loop (A → B → C → B), and rest days (#536).
-  const addToSeq = () => menuSheet({
-    title: t('Add to the rotation'),
-    items: [
-      ...(seq.length ? [{ icon: 'moon', label: t('Rest day'), sub: t('A day off before the next one'), onClick: () => setSeq([...seq, REST]) }] : []),
-      ...S.routines.map(r => ({
-        icon: glyphOf(r.emoji), label: r.name, sub: seq.includes(r.id) ? t('Already in the loop: adds it again') : undefined, onClick: () => setSeq([...seq, r.id]),
-      })),
-    ],
-  })
-  // The only path from a coach-written queue into a managed one: behind a confirmation that says
-  // what happens — the coach gives up control: this app owns the queue and refills it itself, and a
-  // later week written by the coach's app simply replaces it (the whole queue object, token and all).
-  // The rotation takes a name of its own here rather than the planner's (e.g. "US W1") — that
-  // name is this one pass's, and refillAfter would otherwise repeat it on every pass after it.
-  // A loop of your own saved here is overwritten by the adoption, so the confirm says so.
-  const ownSeq = S.rotation?.sequence || []
-  const replacesOwn = ownSeq.length > 0 && (ownSeq.length !== seq.length || ownSeq.some((id, i) => id !== seq[i]))
-  const adopt = () => confirmSheet({
-    title: t('Use this rotation?'),
-    message: t('Your coach gives up control of this week: openGym owns the queue from here on and repeats these sessions by itself once they are all done. A new week from the coach’s app would replace this rotation.')
-      + (replacesOwn ? ' ' + t('Your own loop gets replaced.') : ''),
-    confirmText: t('Use this rotation'),
-    onConfirm: () => update(s => saveRotation(s, seq, '')),
-  })
-
-  const ws = weekStartOf(S)
-  const todayDow = new Date().getDay()
-  const routineOf = id => S.routines.find(x => x.id === id)
-  const dayRoutines = d => [].concat(S.week[d] || []).map(routineOf).filter(Boolean)
-  // One weekday: what is on it at a glance, and a tap to change it (dayAssignSheet picks one
-  // routine, several for a combined day, or a rest day).
-  const dayRow = (d, rs = dayRoutines(d)) => {
-    return <div key={d} className="item plan-day" data-day={d} aria-label={t(DAYN[d])} {...tappable(() => dayAssignSheet(d))}>
-      <span className={'plan-day-n' + (d === todayDow ? ' today' : '')} aria-hidden="true">{t(DAYS[d])}</span>
-      <span className={'lrow-i' + (rs.length ? '' : ' rest')}><Icon name={rs.length ? glyphOf(rs[0].emoji) : 'moon'} /></span>
-      <div className="grow">
-        <div className="tt">{rs.length ? deriveSessionName(rs.map(r => r.name)) : t('Rest day')}</div>
-        <div className="ss">{rs.length === 1 ? exCount(rs[0].ex.length) : rs.length ? routineCount(rs.length) : t('Tap to plan something')}</div>
-      </div>
-      {rs.length > 0 && <MiniBodyMap routines={rs} body={S.body} tour="plan-body" />}
-      <Icon name="chevronRight" className="chev" />
-    </div>
+  function handleClearDay(dayId) {
+    const updated = { ...schedule }
+    delete updated[dayId]
+    saveDayAssignment(dayId, { rest: true, name: 'يوم راحة للفريق' })
   }
-  // Beside a loop, a weekday shows only what it adds to it: a routine that is in the loop already
-  // is the loop's session, the same rule Home follows (effectiveRoutineIds, history.js).
-  const extraRoutines = d => dayRoutines(d).filter(r => !seq.includes(r.id))
-  const plannedDays = weekOrder(ws).filter(d => extraRoutines(d).length)
-  const doneCount = qv ? qv.items.filter(i => i.state === 'done').length : 0
-  const stateWord = item => item.state === 'pinned' ? fmtDate(item.on, true)
-    : { done: t('Done'), next: t('Up next'), later: t('Later') }[item.state]
-  const editing = editLoop && !external
 
-  return <>
-    <Section className="plan-mode" tour="plan-mode" footer={mode === 'rotation'
-      ? t('Routines in a loop. Whatever is next stays next until you train it, whatever the day.')
-      : t('The same routines on the same weekdays, every week.')}>
-      <Row icon="repeat" iconTint="var(--orange)" title={t('How you train')}>
-        {/* A planner's own queue is not this app's to switch off: text, not a control. */}
-        {external
-          ? <span className="small dim plan-mode-locked">{t('Rotation')} · {t('Externally managed')}</span>
-          : <Segmented className="seg-inline" value={mode} onChange={setMode}
-              options={[{ value: 'week', label: t('Fixed Week') }, { value: 'rotation', label: t('Rotation') }]} />}
-      </Row>
-      {/* a cobweb in the card's empty top corner, in season (components/Seasonal.jsx) */}
-      <SeasonDeco spot="plan-card" />
-    </Section>
+  function handleStartTeamWorkout(dayData) {
+    if (!dayData || !dayData.exercises?.length) {
+      toast('لا توجد تمارين مسجلة لهذه الحصة بعد')
+      return
+    }
+    let routine = S.routines.find(r => r.name === dayData.name)
+    if (!routine) {
+      routine = {
+        id: uid(),
+        name: dayData.name,
+        emoji: DEFAULT_GLYPH,
+        ex: dayData.exercises.map(e => ({
+          id: e.id || e.exercise_id,
+          sets: Array(e.sets || 3).fill().map(() => ({ w: e.target_weight || 0, r: e.reps || 10 }))
+        }))
+      }
+      update(s => { s.routines.push(routine) })
+    }
+    startFlow([routine.id])
+  }
 
-    {!S.routines.length && <EmptyState className="plan-empty" icon="clipboard" title={t('No routines yet.')} text={t('Make one, or grab the starter plan to get going.')}>
-      <Button variant="tinted" icon="clipboard" onClick={starterPlanSheet}>{t('Load starter plan')}</Button>
-    </EmptyState>}
+  if (teams.length === 0) {
+    return (
+      <EmptyState icon="person" title="لست عضواً أو مدرباً في أي فريق" text="انضم إلى فريق رياضي برمز الدعوة أو أنشئ فريقك الخاص لإدارة جدول التمارين.">
+        <Button variant="tinted" icon="plus" onClick={() => nav('/teams')}>
+          الانتقال إلى قسم الفرق
+        </Button>
+      </EmptyState>
+    )
+  }
 
-    {/* A queue payload that arrived unusable: a fix-up, shown whichever way you train. Giving it
-        up also gives up S.scheduleMode='rotation', or the loop would sit there with no queue. */}
-    {recovery && <div className="empty">
-      {t('This rotation couldn’t be read. Another device may have written it.')}
-      <div style={{ marginTop: 10 }}>
-        <Button size="sm" variant="tinted" aria-label={t('Discard it')} onClick={() => update(s => { s.queue = null; s.scheduleMode = 'week' })}>{t('Discard it')}</Button>
-      </div>
-    </div>}
-
-    {mode === 'week' ? <>
-      <h4 className="sec">{t('This week')}</h4>
-      <div className="list plan-week" data-tour="plan-week">{weekOrder(ws).map(d => dayRow(d))}</div>
-      <p className="sect-f">{t('Want two routines on one day? Tap the day and pick both.')}</p>
-    </> : <div className="rotation">
-      <div className="row between plan-sec-h">
-        <h4 className="sec">{t('The loop')}{external && <span className="tag" style={{ marginInlineStart: 8 }}>{t('Externally managed')}</span>}</h4>
-        {/* A coach's own queue is read-only here: the one way to change what it holds is to
-            adopt it first ("Use this rotation" below), never a tap on one of its rows. */}
-        {!external && <div className="row plan-sec-acts" style={{ gap: 6 }}>
-          {seq.length > 0 && <button className="plan-textbtn" aria-pressed={editLoop} onClick={() => setEditLoop(e => !e)}>{editLoop ? t('Done') : t('Edit')}</button>}
-          <Button size="sm" variant="tinted" icon="plus" data-tour="plan-loop-add" aria-label={t('Add routine to the rotation')}
-            disabled={!S.routines.length} onClick={addToSeq}>{t('Add')}</Button>
-        </div>}
-      </div>
-      {seq.length ? <div className="list plan-loop" ref={loopReorder.listRef}>
-        {seq.map((id, i) => {
-          const rest = id === REST
-          const r = rest ? null : routineOf(id)
-          // In a loop with rests or repeats the pass is the running segment: only its rows have
-          // a state, the rest of the loop is still ahead.
-          const item = seg ? (i >= seg.start && i < seg.start + seg.ids.length ? qv?.items[i - seg.start] : null) : qv?.items[i]
-          const key = looped ? i + ':' + id : id
-          // The loop's swipe is remove-only (v1.3.11): a routine is in the loop once, so there is
-          // nothing to copy. The row the reorder measures is the swipe's outer element.
-          const reorderProps = { 'data-reorder-row': '', style: loopReorder.rowStyle(i) }
-          const name = rest ? t('Rest day') : r?.name ?? id
-          const row = <div key={swipe ? undefined : key} {...(swipe ? {} : reorderProps)} className={'item rotation-row' + (item?.state === 'done' ? ' is-done' : '') + (rest ? ' is-rest' : '')}>
-            {editing && <button className="plan-minus" aria-label={t('Remove {0}', name)} title={t('Remove')}
-              onClick={() => takeOut(i)}><Icon name="minus" /></button>}
-            <span className={'plan-order' + (item?.state === 'next' ? ' next' : '')}>{item?.state === 'done' ? <Icon name="check" /> : i + 1}</span>
-            <span className={'lrow-i' + (rest ? ' rest' : '')}><Icon name={rest ? 'moon' : glyphOf(r?.emoji)} /></span>
-            <div className="grow" style={{ minWidth: 0 }}>
-              <div className="tt">{name}</div>
-              <div className="ss">{item ? stateWord(item) : rest ? t('A day off before the next one') : r ? exCount(r.ex.length) : ''}</div>
-            </div>
-            {r && !rest && !editing && <MiniBodyMap routines={[r]} body={S.body} />}
-            {editing && seq.length > 1 && <button className="plan-handle" aria-label={t('Move {0}', name)} title={t('Drag to reorder')}
-              {...loopReorder.handle(i)}><Icon name="chevronsUpDown" /></button>}
+  return (
+    <div style={{ marginTop: 14 }}>
+      {/* HEADER & TEAM SELECTOR */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--label)' }}>
+            جدول تدريب الفريق
           </div>
-          return swipe
-            ? <SwipeRow key={key} {...reorderProps} className="swrow-item" deleteLabel={t('Remove')} deleteIcon="minus"
-              onDelete={() => takeOut(i)}>{row}</SwipeRow>
-            : row
-        })}
-      </div> : <div className="empty">{t('No rotation yet. Add routines in the order you want to train them. The first one you haven’t logged stays up next.')}</div>}
-      {seq.length > 0 && <p className="sect-f">
-        {qv ? (qv.waiting ? (looped ? t('Rest day. The loop goes on {0}.', fmtDate(qv.startsOn, true)) : t('Next round starts {0}.', fmtDate(qv.startsOn, true))) : t('{0} of {1} done this round.', doneCount, qv.items.length)) + ' ' : ''}
-        {external ? '' : editing ? t('Drag to reorder. Tap the minus to take one out.') : t('Trained out of order? Just pick another routine on Home.')}
-      </p>}
-      <div className="row" style={{ gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-        {external && <Button size="sm" variant="tinted" aria-label={t('Use this rotation')} onClick={adopt}>{t('Use this rotation')}</Button>}
-        {/* Throws the current round away and starts the saved loop again today; nothing logged
-            before this moment counts for it (startNewPass, the strict pass). */}
-        {!!liveQ && !external && <Button size="sm" icon="reset" aria-label={t('Start the loop over')}
-          onClick={() => update(s => startNewPass(s))}>{t('Start the loop over')}</Button>}
-        {/* Rotation chosen and a loop saved, but no round running (it was stopped elsewhere). */}
-        {!liveQ && !recovery && seq.length > 0 && <Button size="sm" variant="tinted" icon="play" aria-label={t('Start the loop')}
-          onClick={() => update(s => startPass(s))}>{t('Start the loop')}</Button>}
-      </div>
-      {/* The weekday routines ride along beside a loop (effectiveRoutineIds, history.js) and feed
-          the same tally (weekTally, queue.js), so the days that still add one stay in sight; a
-          day whose only routines are in the loop already adds nothing and is left out. */}
-      {plannedDays.length > 0 && <>
-        <h4 className="sec">{t('Also on fixed days')}</h4>
-        <div className="list plan-week">{plannedDays.map(d => dayRow(d, extraRoutines(d)))}</div>
-        <p className="sect-f">{t('These count on top of the loop. Tap a day to change or clear it.')}</p>
-      </>}
-    </div>}
+          <div style={{ fontSize: '0.8rem', color: 'var(--label-2)' }}>
+            {isCoach ? 'أنت مدرب هذا الفريق • يمكنك تحديد التمارين وجدول الأسبوع للجميع' : 'جدول تمارين مجموعتك المعتمد من المدرب'}
+          </div>
+        </div>
 
-    {/* Weekly muscle volume is analysis: it moved to Stats, next to Muscle balance. Stats only
-        shows that card once there is a routine, so the link waits for one too. */}
-    {S.routines.length > 0 && <Section className="plan-link">
-      <Row icon="chart" iconTint="var(--indigo)" title={t('Weekly muscle volume')} subtitle={t('Now in Stats, next to Muscle balance')}
-        accessory="chevron" onClick={() => nav('/stats?focus=weekly-volume')} />
-    </Section>}
-  </>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <select
+            value={selectedTeamId}
+            onChange={e => setSelectedTeamId(e.target.value)}
+            style={{
+              padding: '8px 12px', borderRadius: 8, background: 'var(--surface-2)',
+              border: '1px solid var(--sep-op)', color: 'var(--label)', fontSize: '0.85rem'
+            }}
+          >
+            {teams.map(t => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--label-2)' }}>
+          جاري تحميل جدول الفريق...
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18 }}>
+          {ARABIC_WEEKDAYS.map(day => {
+            const dayData = schedule[day.id]
+            const isRest = !dayData || dayData.rest || !dayData.name
+            const isToday = day.id === todayDow
+
+            return (
+              <div
+                key={day.id}
+                style={{
+                  background: 'var(--surface)',
+                  borderRadius: 14,
+                  border: isToday ? '1px solid var(--acc)' : '1px solid var(--sep-op)',
+                  padding: '14px 16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span style={{ fontWeight: 700, fontSize: '1rem', color: isToday ? 'var(--acc)' : 'var(--label)' }}>
+                      {day.name}
+                    </span>
+                    {isToday && (
+                      <span style={{ padding: '2px 8px', borderRadius: 6, background: 'rgba(52, 199, 89, 0.15)', color: 'var(--green)', fontSize: '0.75rem', fontWeight: 700 }}>
+                        اليوم
+                      </span>
+                    )}
+                  </div>
+
+                  {!isRest ? (
+                    <span style={{ fontSize: '0.8rem', color: 'var(--label-2)' }}>
+                      {dayData.exercises?.length || 0} تمرين
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: '0.8rem', color: 'var(--label-3)' }}>
+                      راحة للفريق
+                    </span>
+                  )}
+                </div>
+
+                {!isRest ? (
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--label)', marginBottom: 4 }}>
+                      {dayData.name}
+                    </div>
+                    {dayData.notes && (
+                      <div style={{ fontSize: '0.8rem', color: 'var(--label-2)', marginBottom: 8 }}>
+                        ملاحظة المدرب: {dayData.notes}
+                      </div>
+                    )}
+
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleStartTeamWorkout(dayData)}
+                        style={{
+                          padding: '6px 14px', borderRadius: 8, background: 'var(--acc)',
+                          color: '#fff', border: 'none', fontWeight: 600, fontSize: '0.8rem', cursor: 'pointer'
+                        }}
+                      >
+                        بدء تمرين اليوم للفريق
+                      </button>
+
+                      {isCoach && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditDay(day)}
+                            style={{
+                              padding: '6px 12px', borderRadius: 8, background: 'var(--surface-2)',
+                              color: 'var(--label)', border: '1px solid var(--sep-op)', fontSize: '0.8rem', cursor: 'pointer'
+                            }}
+                          >
+                            تعديل اليوم
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleClearDay(day.id)}
+                            style={{
+                              padding: '6px 10px', borderRadius: 8, background: 'transparent',
+                              color: 'var(--label-3)', border: 'none', fontSize: '0.8rem', cursor: 'pointer'
+                            }}
+                          >
+                            تحويل إلى راحة
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--label-2)' }}>
+                      يوم راحة واستشفاء للمجموعة
+                    </span>
+                    {isCoach && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditDay(day)}
+                        style={{
+                          padding: '6px 14px', borderRadius: 8, background: 'var(--surface-2)',
+                          color: 'var(--label)', border: '1px solid var(--sep-op)', fontSize: '0.8rem',
+                          fontWeight: 600, cursor: 'pointer'
+                        }}
+                      >
+                        + تعيين تمرين لهذا اليوم
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* MODAL: EDIT TEAM DAY (FOR COACH) */}
+      {editingDay && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16
+        }}>
+          <div style={{
+            background: 'var(--surface)', padding: 20, borderRadius: 16,
+            maxWidth: 440, width: '100%', border: '1px solid var(--sep-op)', direction: 'rtl'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--label)' }}>
+                تعديل جدول الفريق ليوم {editingDay.name}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEditingDay(null)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--label-2)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                aria-label="Close"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveDayModal}>
+              {teamPlans.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 6 }}>
+                    اختيار من خطط وقوالب الفريق:
+                  </label>
+                  <select
+                    value={sourcePlanId}
+                    onChange={e => {
+                      setSourcePlanId(e.target.value)
+                      setSourceRoutineId('')
+                      const p = teamPlans.find(x => x.id === e.target.value)
+                      if (p) setSessionName(p.name)
+                    }}
+                    style={{
+                      width: '100%', padding: '10px', borderRadius: 8,
+                      background: 'var(--surface-2)', border: '1px solid var(--sep-op)',
+                      color: 'var(--label)', fontSize: '0.85rem'
+                    }}
+                  >
+                    <option value="">-- اختر خطة فريق موجودة (اختياري) --</option>
+                    {teamPlans.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {S.routines.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 6 }}>
+                    أو اختيار من خططك الشخصية:
+                  </label>
+                  <select
+                    value={sourceRoutineId}
+                    onChange={e => {
+                      setSourceRoutineId(e.target.value)
+                      setSourcePlanId('')
+                      const r = S.routines.find(x => x.id === e.target.value)
+                      if (r) setSessionName(r.name)
+                    }}
+                    style={{
+                      width: '100%', padding: '10px', borderRadius: 8,
+                      background: 'var(--surface-2)', border: '1px solid var(--sep-op)',
+                      color: 'var(--label)', fontSize: '0.85rem'
+                    }}
+                  >
+                    <option value="">-- اختر خطة شخصية لتحويلها للفريق (اختياري) --</option>
+                    {S.routines.map(r => (
+                      <option key={r.id} value={r.id}>{r.name} ({r.ex?.length || 0} تمرين)</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 6 }}>
+                  عنوان الحصة التدريبية:
+                </label>
+                <input
+                  type="text"
+                  value={sessionName}
+                  onChange={e => setSessionName(e.target.value)}
+                  placeholder="مثال: تمارين الصدر والترايسبس"
+                  required
+                  style={{
+                    width: '100%', padding: '10px', borderRadius: 8,
+                    background: 'var(--surface-2)', border: '1px solid var(--sep-op)',
+                    color: 'var(--label)', fontSize: '0.85rem'
+                  }}
+                />
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 6 }}>
+                  تعليمات وملاحظات المدرب لليوم:
+                </label>
+                <input
+                  type="text"
+                  value={sessionNotes}
+                  onChange={e => setSessionNotes(e.target.value)}
+                  placeholder="مثال: راحة 90 ثانية، الإحماء 10 دقائق قبل البدء"
+                  style={{
+                    width: '100%', padding: '10px', borderRadius: 8,
+                    background: 'var(--surface-2)', border: '1px solid var(--sep-op)',
+                    color: 'var(--label)', fontSize: '0.85rem'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setEditingDay(null)}
+                  style={{
+                    padding: '8px 16px', borderRadius: 8, background: 'transparent',
+                    border: '1px solid var(--sep-op)', color: 'var(--label)', cursor: 'pointer'
+                  }}
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  style={{
+                    padding: '8px 18px', borderRadius: 8, background: 'var(--acc)',
+                    border: 'none', color: '#fff', fontWeight: 600, cursor: 'pointer'
+                  }}
+                >
+                  حفظ في جدول الفريق
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
-/* ================================ Routines ================================ */
+/* ================================ 3. Personal Routines ================================ */
 
 function Routines({ S, update, nav }) {
   const [edit, setEdit] = useState(false)
   const [flash, setFlash] = useState(null)
   const [copyTargetRoutine, setCopyTargetRoutine] = useState(null)
+  const [assignDayRoutine, setAssignDayRoutine] = useState(null)
   const [teams, setTeams] = useState([])
   const [selectedTeamId, setSelectedTeamId] = useState('')
+  const [targetTeamDay, setTargetTeamDay] = useState('')
   const toast = useUI(s => s.toast)
   const swipe = workoutControls(S).swipeSets
   const routines = S.routines
@@ -463,9 +1012,32 @@ function Routines({ S, update, nav }) {
           ]
         })
       })
+
       if (res.ok) {
-        toast(`تم نسخ "${copyTargetRoutine.name}" إلى خطة الفريق بنجاح!`)
+        // If a day in team schedule was chosen, assign it there too
+        if (targetTeamDay !== '') {
+          const dayId = parseInt(targetTeamDay, 10)
+          const schedRes = await fetch(`/api/teams/schedule?teamId=${selectedTeamId}`)
+          if (schedRes.ok) {
+            const schedData = await schedRes.json()
+            const curSched = schedData.schedule || {}
+            curSched[dayId] = {
+              name: copyTargetRoutine.name,
+              exercises: copyTargetRoutine.ex.map(e => ({ id: e.id, name: e.id, sets: e.sets?.length || 3, reps: '8-10' })),
+              notes: 'منسوخة من الخطط المنفردة',
+              rest: false
+            }
+            await fetch('/api/teams/schedule', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ team_id: selectedTeamId, schedule: curSched })
+            })
+          }
+        }
+
+        toast(`تم نسخ "${copyTargetRoutine.name}" إلى الفريق بنجاح!`)
         setCopyTargetRoutine(null)
+        setTargetTeamDay('')
       } else {
         toast('تعذر نسخ الخطة إلى الفريق')
       }
@@ -474,9 +1046,21 @@ function Routines({ S, update, nav }) {
     }
   }
 
-  // The order of this list is the order of `S.routines`, and every other screen reads the same
-  // array (the Start screen, the day sheets, the routine pickers), so moving a routine here moves
-  // it everywhere (#142). Reordering lives behind Edit, like on an iPhone.
+  function handleAssignRoutineToWeekday(dayId) {
+    if (!assignDayRoutine) return
+    update(s => {
+      const cur = [].concat(s.week[dayId] || [])
+      if (cur.includes(assignDayRoutine.id)) {
+        s.week[dayId] = cur.filter(x => x !== assignDayRoutine.id)
+        if (!s.week[dayId].length) delete s.week[dayId]
+      } else {
+        s.week[dayId] = [...cur, assignDayRoutine.id]
+      }
+    })
+    const dayObj = ARABIC_WEEKDAYS.find(w => w.id === dayId)
+    toast(`تم تحديث جدول يوم ${dayObj?.name || ''}`)
+  }
+
   const reorder = useListReorder(routines.length, (from, to) => update(s => {
     if (to < 0 || to >= s.routines.length) return
     const [m] = s.routines.splice(from, 1)
@@ -500,17 +1084,18 @@ function Routines({ S, update, nav }) {
       update(s => { if (s.routines.some(x => x.id === copy.id)) deleteRoutine(s, copy.id) })
     } })
   }
-  const order = weekOrder(weekStartOf(S))
-  const daysOf = id => order.filter(d => [].concat(S.week[d] || []).includes(id)).map(d => t(DAYS[d]))
-  const sub = r => [exCount(r.ex.length), daysOf(r.id).join(', ')].filter(Boolean).join(' · ')
+
+  const daysOf = id => ARABIC_WEEKDAYS.filter(d => [].concat(S.week[d.id] || []).includes(id)).map(d => d.name)
+  const sub = r => [exCount(r.ex.length), daysOf(r.id).join('، ')].filter(Boolean).join(' • ')
 
   return <>
-    <div className="row between plan-sec-h plan-routines-bar">
+    <div className="row between plan-sec-h plan-routines-bar" style={{ marginTop: 12 }}>
       {routines.length > 0
         ? <button className="plan-textbtn" aria-pressed={edit} onClick={() => setEdit(e => !e)}>{edit ? t('Done') : t('Edit')}</button>
         : <span />}
       <Button size="sm" variant="tinted" icon="plus" data-tour="plan-new" onClick={addRoutine}>{t('New routine')}</Button>
     </div>
+
     {routines.length ? <>
       {edit
         ? <div className="list routine-list plan-routines is-editing" ref={reorder.listRef}>{routines.map((r, i) =>
@@ -526,17 +1111,28 @@ function Routines({ S, update, nav }) {
             <span className="lrow-i"><Icon name={glyphOf(r.emoji)} /></span>
             <div className="grow"><div className="tt">{r.name}</div><div className="ss">{sub(r)}</div></div>
             <MiniBodyMap routines={[r]} body={S.body} />
-            {teams.length > 0 && (
+            <div style={{ display: 'flex', gap: 4, marginRight: 8 }}>
               <button
                 type="button"
                 className="iconbtn"
-                title="نسخ إلى خطة فريق"
-                onClick={e => { e.stopPropagation(); setCopyTargetRoutine(r); }}
-                style={{ marginLeft: 6, marginRight: 6, color: 'var(--acc)' }}
+                title="تعيين ليوم بالجدول الشخصي"
+                onClick={e => { e.stopPropagation(); setAssignDayRoutine(r); }}
+                style={{ color: 'var(--label)' }}
               >
-                <Icon name="share" />
+                <Icon name="calendar" />
               </button>
-            )}
+              {teams.length > 0 && (
+                <button
+                  type="button"
+                  className="iconbtn"
+                  title="نسخ إلى خطة وجدول الفريق"
+                  onClick={e => { e.stopPropagation(); setCopyTargetRoutine(r); }}
+                  style={{ color: 'var(--acc)' }}
+                >
+                  <Icon name="share" />
+                </button>
+              )}
+            </div>
             <Icon name="chevronRight" className="chev" /></div>
           return swipe
             ? <SwipeRow key={r.id} className="swrow-item" copyLabel={t('Duplicate')}
@@ -544,12 +1140,77 @@ function Routines({ S, update, nav }) {
               flash={flash?.id === r.id ? flash.n : 0}>{row}</SwipeRow>
             : row
         })}</div>}
-      <p className="sect-f">{edit ? t('Drag to reorder. Tap the minus to delete.') : t('Tap a routine to edit it. Reorder and delete are behind Edit.')}</p>
+      <p className="sect-f">{edit ? t('Drag to reorder. Tap the minus to delete.') : 'اضغط على الروتين لتعديل التمارين، أو استخدم الأيقونات لتعيينه بالجدول أو نسخه للفريق.'}</p>
     </> : <>
       <EmptyState icon="clipboard" title={t('No routines yet.')} text={t('Make one, or grab the starter plan to get going.')}>
         <Button variant="tinted" icon="clipboard" onClick={starterPlanSheet}>{t('Load starter plan')}</Button>
       </EmptyState>
     </>}
+
+    {/* MODAL: ASSIGN ROUTINE TO PERSONAL WEEKDAYS */}
+    {assignDayRoutine && (
+      <div style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16
+      }}>
+        <div style={{
+          background: 'var(--surface)', padding: 20, borderRadius: 16,
+          maxWidth: 420, width: '100%', border: '1px solid var(--sep-op)', direction: 'rtl'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--label)' }}>
+              تعيين "{assignDayRoutine.name}" بأيام الأسبوع
+            </h3>
+            <button
+              type="button"
+              onClick={() => setAssignDayRoutine(null)}
+              style={{ background: 'transparent', border: 'none', color: 'var(--label-2)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+              aria-label="Close"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+
+          <div style={{ fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 12 }}>
+            اختر الأيام التي تريد تنفيذ هذا الروتين فيها ضمن جدولك الشخصي:
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 16 }}>
+            {ARABIC_WEEKDAYS.map(day => {
+              const active = [].concat(S.week[day.id] || []).includes(assignDayRoutine.id)
+              return (
+                <button
+                  key={day.id}
+                  type="button"
+                  onClick={() => handleAssignRoutineToWeekday(day.id)}
+                  style={{
+                    padding: '10px', borderRadius: 8,
+                    background: active ? 'var(--acc)' : 'var(--surface-2)',
+                    color: active ? '#fff' : 'var(--label)',
+                    border: '1px solid var(--sep-op)', fontWeight: 600, fontSize: '0.85rem',
+                    cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                  }}
+                >
+                  <span>{day.name}</span>
+                  {active && <Icon name="check" />}
+                </button>
+              )
+            })}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setAssignDayRoutine(null)}
+            style={{
+              width: '100%', padding: '10px', borderRadius: 8, background: 'var(--surface-2)',
+              color: 'var(--label)', border: 'none', fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer'
+            }}
+          >
+            إغلاق
+          </button>
+        </div>
+      </div>
+    )}
 
     {/* MODAL: COPY PERSONAL ROUTINE TO TEAM */}
     {copyTargetRoutine && (
@@ -558,12 +1219,12 @@ function Routines({ S, update, nav }) {
         display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16
       }}>
         <div style={{
-          background: 'var(--surface)', padding: 20, borderRadius: 14,
+          background: 'var(--surface)', padding: 20, borderRadius: 16,
           maxWidth: 440, width: '100%', border: '1px solid var(--sep-op)', direction: 'rtl'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
             <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--label)' }}>
-              نسخ الخطة المنفردة إلى خطة فريق
+              نسخ الخطة إلى خطة وجدول الفريق
             </h3>
             <button onClick={() => setCopyTargetRoutine(null)} style={{ background: 'transparent', border: 'none', color: 'var(--label-2)', cursor: 'pointer', display: 'flex', alignItems: 'center' }} aria-label="Close">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -576,7 +1237,7 @@ function Routines({ S, update, nav }) {
               <div style={{ fontWeight: 600, color: 'var(--label)' }}>{copyTargetRoutine.name} ({copyTargetRoutine.ex?.length || 0} تمرين)</div>
             </div>
 
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 14 }}>
               <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 6 }}>
                 اختر الفريق المستهدف:
               </label>
@@ -592,6 +1253,26 @@ function Routines({ S, update, nav }) {
               >
                 {teams.map(t => (
                   <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 6 }}>
+                تعيين في جدول الفريق (اختياري):
+              </label>
+              <select
+                value={targetTeamDay}
+                onChange={e => setTargetTeamDay(e.target.value)}
+                style={{
+                  width: '100%', padding: '10px', borderRadius: 8,
+                  background: 'var(--surface-2)', border: '1px solid var(--sep-op)',
+                  color: 'var(--label)', fontSize: '0.85rem'
+                }}
+              >
+                <option value="">بدون تعيين ليوم محدد حالياً (قالب فقط)</option>
+                {ARABIC_WEEKDAYS.map(w => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
                 ))}
               </select>
             </div>
@@ -614,7 +1295,7 @@ function Routines({ S, update, nav }) {
                   border: 'none', color: '#fff', fontWeight: 600, cursor: 'pointer'
                 }}
               >
-                تأكيد النسخ للفريق
+                تأكيد النسخ والتعيين
               </button>
             </div>
           </form>
@@ -624,13 +1305,14 @@ function Routines({ S, update, nav }) {
   </>
 }
 
-/* ================================ Team Plans Hub ================================ */
+/* ================================ 4. Team Plans Hub ================================ */
 
 function TeamPlansHub({ S, update, nav }) {
   const [plans, setPlans] = useState([])
   const [teams, setTeams] = useState([])
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [assigningPlan, setAssigningPlan] = useState(null)
   const [newPlanTeamId, setNewPlanTeamId] = useState('')
   const [newPlanName, setNewPlanName] = useState('')
   const [newPlanDesc, setNewPlanDesc] = useState('')
@@ -665,7 +1347,7 @@ function TeamPlansHub({ S, update, nav }) {
     }
   }
 
-  function copyTeamPlanToPersonal(teamPlan) {
+  function copyTeamPlanToPersonal(teamPlan, assignDayId = null) {
     if (!teamPlan) return
     const days = teamPlan.days_json || []
     let allEx = []
@@ -691,8 +1373,59 @@ function TeamPlansHub({ S, update, nav }) {
 
     update(s => {
       s.routines.push(newRoutine)
+      if (assignDayId !== null) {
+        s.week[assignDayId] = [newRoutine.id]
+      }
     })
     toast(`تم نسخ خطة "${teamPlan.name}" إلى خططك المنفردة بنجاح!`)
+  }
+
+  async function handleAssignPlanToTeamSchedule(plan, dayId) {
+    try {
+      const schedRes = await fetch(`/api/teams/schedule?teamId=${plan.team_id}`)
+      if (schedRes.ok) {
+        const d = await schedRes.json()
+        const curSched = d.schedule || {}
+        let exercises = []
+        if (Array.isArray(plan.days_json)) {
+          plan.days_json.forEach(dayObj => {
+            if (Array.isArray(dayObj.exercises)) exercises.push(...dayObj.exercises)
+          })
+        }
+        curSched[dayId] = {
+          name: plan.name,
+          exercises,
+          notes: plan.description || 'معتمد من خطة الفريق',
+          plan_id: plan.id,
+          rest: false
+        }
+        await fetch('/api/teams/schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ team_id: plan.team_id, schedule: curSched })
+        })
+        const dayObj = ARABIC_WEEKDAYS.find(w => w.id === dayId)
+        toast(`تم تعيين الخطة في جدول الفريق ليوم ${dayObj?.name || ''}!`)
+        setAssigningPlan(null)
+      }
+    } catch (e) {
+      toast('خطأ في تعيين الخطة بالجدول')
+    }
+  }
+
+  async function handleDeleteTeamPlan(planId) {
+    if (!window.confirm('هل أنت متأكد من حذف هذه الخطة؟')) return
+    try {
+      const res = await fetch(`/api/teams/plan?planId=${planId}`, { method: 'DELETE' })
+      if (res.ok) {
+        toast('تم حذف خطة الفريق بنجاح')
+        loadData()
+      } else {
+        toast('تعذر حذف الخطة')
+      }
+    } catch (e) {
+      toast('خطأ في الاتصال بالخادم')
+    }
   }
 
   async function handleCreateTeamPlan(e) {
@@ -733,10 +1466,10 @@ function TeamPlansHub({ S, update, nav }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
         <div>
           <div style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--label)' }}>
-            خطط الفرق والمجموعات
+            خطط وقوالب الفرق
           </div>
           <div style={{ fontSize: '0.8rem', color: 'var(--label-2)' }}>
-            إدارة القوالب الجماعية وإمكانية النسخ بين البرامج الشخصية وبرامج الفرق
+            إدارة القوالب الجماعية وإمكانية تعيينها في جدول الفريق أو نسخها للخطط الشخصية
           </div>
         </div>
 
@@ -776,17 +1509,17 @@ function TeamPlansHub({ S, update, nav }) {
                 key={p.id}
                 style={{
                   background: 'var(--surface)',
-                  borderRadius: 12,
+                  borderRadius: 14,
                   border: '1px solid var(--sep-op)',
-                  padding: 14
+                  padding: 16
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--label)' }}>
+                    <div style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--label)' }}>
                       {p.name}
                     </div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--label-2)', marginTop: 2 }}>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--label-2)', marginTop: 4 }}>
                       الفريق: <b>{p.team_name}</b> • {daysCount} أيام تدريبية • {exCountTotal} تمرين
                     </div>
                     {p.description && (
@@ -796,23 +1529,28 @@ function TeamPlansHub({ S, update, nav }) {
                     )}
                   </div>
 
-                  <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => setAssigningPlan(p)}
+                      title="تعيين في جدول الفريق"
+                      style={{
+                        padding: '6px 12px', borderRadius: 8, background: 'var(--surface-2)',
+                        color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer',
+                        fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6
+                      }}
+                    >
+                      <Icon name="calendar" /> تعيين بجدول الفريق
+                    </button>
+
                     <button
                       type="button"
                       onClick={() => copyTeamPlanToPersonal(p)}
                       title="نسخ إلى خططي المنفردة"
                       style={{
-                        padding: '6px 12px',
-                        borderRadius: 6,
-                        background: 'var(--surface-2)',
-                        color: 'var(--label)',
-                        border: '1px solid var(--sep-op)',
-                        cursor: 'pointer',
-                        fontSize: '0.8rem',
-                        fontWeight: 500,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 4
+                        padding: '6px 12px', borderRadius: 8, background: 'var(--surface-2)',
+                        color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer',
+                        fontSize: '0.8rem', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4
                       }}
                     >
                       <Icon name="copy" /> نسخ للشخصي
@@ -822,23 +1560,82 @@ function TeamPlansHub({ S, update, nav }) {
                       type="button"
                       onClick={() => nav(`/teams/plan?teamId=${p.team_id}&planId=${p.id}`)}
                       style={{
-                        padding: '6px 14px',
-                        borderRadius: 6,
-                        background: 'var(--acc)',
-                        color: '#fff',
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.8rem',
-                        fontWeight: 600
+                        padding: '6px 14px', borderRadius: 8, background: 'var(--acc)',
+                        color: '#fff', border: 'none', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600
                       }}
                     >
                       تعديل وتخصيص الخطة
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteTeamPlan(p.id)}
+                      style={{
+                        padding: '6px 10px', borderRadius: 8, background: 'transparent',
+                        color: 'var(--label-3)', border: 'none', cursor: 'pointer', fontSize: '0.8rem'
+                      }}
+                    >
+                      حذف
                     </button>
                   </div>
                 </div>
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* MODAL: ASSIGN PLAN TO TEAM SCHEDULE DAY */}
+      {assigningPlan && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16
+        }}>
+          <div style={{
+            background: 'var(--surface)', padding: 20, borderRadius: 16,
+            maxWidth: 420, width: '100%', border: '1px solid var(--sep-op)', direction: 'rtl'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--label)' }}>
+                تعيين الخطة في جدول الفريق
+              </h3>
+              <button onClick={() => setAssigningPlan(null)} style={{ background: 'transparent', border: 'none', color: 'var(--label-2)', cursor: 'pointer', display: 'flex', alignItems: 'center' }} aria-label="Close">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+
+            <div style={{ fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 12 }}>
+              الخطة: <b>{assigningPlan.name}</b> • اختر اليوم المراد تعيين هذه الخطة فيه ضمن جدول الفريق:
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 16 }}>
+              {ARABIC_WEEKDAYS.map(day => (
+                <button
+                  key={day.id}
+                  type="button"
+                  onClick={() => handleAssignPlanToTeamSchedule(assigningPlan, day.id)}
+                  style={{
+                    padding: '12px 10px', borderRadius: 8, background: 'var(--surface-2)',
+                    color: 'var(--label)', border: '1px solid var(--sep-op)', fontWeight: 600,
+                    fontSize: '0.85rem', cursor: 'pointer', textAlign: 'center'
+                  }}
+                >
+                  {day.name}
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setAssigningPlan(null)}
+              style={{
+                width: '100%', padding: '10px', borderRadius: 8, background: 'var(--surface-2)',
+                color: 'var(--label)', border: 'none', fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer'
+              }}
+            >
+              إلغاء
+            </button>
+          </div>
         </div>
       )}
 
@@ -849,12 +1646,12 @@ function TeamPlansHub({ S, update, nav }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16
         }}>
           <div style={{
-            background: 'var(--surface)', padding: 20, borderRadius: 14,
+            background: 'var(--surface)', padding: 20, borderRadius: 16,
             maxWidth: 440, width: '100%', border: '1px solid var(--sep-op)', direction: 'rtl'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
               <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--label)' }}>
-                إنشاء خطة فريق جديدة
+                إنشاء خطة وقالب فريق جديد
               </h3>
               <button onClick={() => setShowCreateModal(false)} style={{ background: 'transparent', border: 'none', color: 'var(--label-2)', cursor: 'pointer', display: 'flex', alignItems: 'center' }} aria-label="Close">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>

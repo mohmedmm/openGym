@@ -200,5 +200,20 @@ test('Teams Hub & Multi-User Architecture Suite', async (t) => {
     const outsiderAccess = await db.canUserAccessChat('attacker_999', 'team', createdTeam.id);
     assert.equal(outsiderAccess, false);
   });
+
+  await t.test('10. Team weekly schedule persistence and plan deletion', async () => {
+    const weeklySchedule = {
+      0: { day_name: 'الأحد', routine_name: 'صدر وترايسبس', exercises_count: 5 },
+      2: { day_name: 'الثلاثاء', routine_name: 'ظهر وبايسبس', exercises_count: 5 },
+      4: { day_name: 'الخميس', routine_name: 'أرجل وأكتاف', exercises_count: 6 }
+    };
+    const updated = await db.updateTeamSchedule(createdTeam.id, weeklySchedule);
+    assert.ok(updated);
+    assert.equal(updated.schedule_json[0].routine_name, 'صدر وترايسبس');
+
+    // Verify deletion
+    const delRes = await db.deleteTeamPlan(createdPlan.id);
+    assert.equal(delRes, true);
+  });
 });
 

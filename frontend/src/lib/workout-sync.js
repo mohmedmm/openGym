@@ -118,3 +118,4 @@ export async function syncWorkoutFinished(completed) {
     // Non-blocking resilient catch
   }
 }
+

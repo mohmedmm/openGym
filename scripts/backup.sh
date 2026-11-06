@@ -19,3 +19,4 @@ fi
 find "$BACKUP_DIR" -type f -name "*.gz" -mtime +14 -delete
 
 echo "[$(date)] Backup completed: $FILENAME"
+
