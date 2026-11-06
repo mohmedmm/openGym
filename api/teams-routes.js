@@ -106,9 +106,11 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
     const user = await getUser(req);
     if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
     const body = await readBody(req);
-    if (!body.team_id || !body.name) return sendJson(res, 400, { error: 'team_id and name required' });
+    const teamId = body.team_id || body.teamId;
+    const name = body.name;
+    if (!teamId || !name) return sendJson(res, 400, { error: 'team_id and name required' });
 
-    const team = await db.getTeamDetails(body.team_id);
+    const team = await db.getTeamDetails(teamId);
     if (!team) return sendJson(res, 404, { error: 'Team not found' });
     if (team.head_coach_uid !== user.id && !isAdmin(user)) {
       return sendJson(res, 403, { error: 'Only coach can edit team plan' });
@@ -116,10 +118,10 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
 
     const plan = await db.saveTeamPlan({
       id: body.id,
-      team_id: body.team_id,
-      name: body.name,
-      description: body.description,
-      days_json: body.days_json
+      team_id: teamId,
+      name: name,
+      description: body.description || '',
+      days_json: body.days_json || body.routineDays || body.daysJson || []
     });
     sendJson(res, 200, { success: true, plan });
   };
@@ -129,8 +131,8 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
     const user = await getUser(req);
     if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
     const url = new URL(req.url, 'http://localhost');
-    const planId = url.searchParams.get('planId');
-    const memberUid = url.searchParams.get('uid') || user.id;
+    const planId = url.searchParams.get('planId') || url.searchParams.get('plan_id');
+    const memberUid = url.searchParams.get('uid') || url.searchParams.get('memberUid') || user.id;
 
     if (!planId) return sendJson(res, 400, { error: 'planId required' });
     const overrides = await db.getPlanOverrides(planId, memberUid);
@@ -141,11 +143,28 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
     const user = await getUser(req);
     if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
     const body = await readBody(req);
-    if (!body.team_plan_id || !body.uid || !body.day_id || !body.exercise_id) {
+    const teamPlanId = body.team_plan_id || body.teamPlanId || body.planId;
+    const targetUid = body.uid || body.memberUid || body.userId;
+    const dayId = body.day_id || body.dayId;
+    const exerciseId = body.exercise_id || body.exerciseId;
+
+    if (!teamPlanId || !targetUid || !dayId || !exerciseId) {
       return sendJson(res, 400, { error: 'Missing required override fields' });
     }
 
-    const override = await db.upsertPlanOverride(body);
+    const override = await db.upsertPlanOverride({
+      team_plan_id: teamPlanId,
+      uid: targetUid,
+      day_id: dayId,
+      exercise_id: exerciseId,
+      replacement_exercise_id: body.replacement_exercise_id || body.replacementExerciseId,
+      custom_sets: body.custom_sets || body.customSets,
+      custom_reps: body.custom_reps || body.customReps,
+      custom_target_weight: body.custom_target_weight || body.customTargetWeight,
+      custom_rest_sec: body.custom_rest_sec || body.customRestSec,
+      custom_rpe_rir: body.custom_rpe_rir || body.customRpeRir,
+      coach_notes: body.coach_notes || body.coachNotes
+    });
     sendJson(res, 200, { success: true, override });
   };
 
@@ -154,17 +173,31 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
     const user = await getUser(req);
     if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
     const body = await readBody(req);
-    // body: { team_plan_id, target_uids: [...], overrides: [...] }
-    if (!body.team_plan_id || !Array.isArray(body.target_uids)) {
+    const teamPlanId = body.team_plan_id || body.teamPlanId || body.planId;
+    const targetUids = body.target_uids || body.targetUids;
+
+    if (!teamPlanId || !Array.isArray(targetUids)) {
       return sendJson(res, 400, { error: 'Invalid batch sync request' });
     }
 
     const saved = [];
-    for (const uid of body.target_uids) {
+    for (const uid of targetUids) {
       if (Array.isArray(body.overrides)) {
         for (const ov of body.overrides) {
-          const item = await db.upsertPlanOverride({ ...ov, team_plan_id: body.team_plan_id, uid });
-          saved.push(item);
+          const resOv = await db.upsertPlanOverride({
+            team_plan_id: teamPlanId,
+            uid: uid,
+            day_id: ov.day_id || ov.dayId,
+            exercise_id: ov.exercise_id || ov.exerciseId,
+            replacement_exercise_id: ov.replacement_exercise_id || ov.replacementExerciseId,
+            custom_sets: ov.custom_sets || ov.customSets,
+            custom_reps: ov.custom_reps || ov.customReps,
+            custom_target_weight: ov.custom_target_weight || ov.customTargetWeight,
+            custom_rest_sec: ov.custom_rest_sec || ov.customRestSec,
+            custom_rpe_rir: ov.custom_rpe_rir || ov.customRpeRir,
+            coach_notes: ov.coach_notes || ov.coachNotes
+          });
+          saved.push(resOv);
         }
       }
     }
