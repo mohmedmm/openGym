@@ -20,11 +20,11 @@ COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci --ignore-scripts
 COPY api/coach/core/ /app/api/coach/core/
 COPY frontend/ ./
-# Which build this is, shown in the app as "1.3.8+<build>" next to the version. Without it every
-# image built between two releases calls itself the same thing, and "which build are you running?"
-# cannot be answered from the phone. Unset, the app reports package.json's version as before.
+# External CDN media architecture (Zero server bloat per requirement 11):
+# Media files are streamed from CDN/External repository, keeping the local image lean and fast.
 ARG APP_BUILD=""
-RUN APP_BUILD="$APP_BUILD" npm run build
+RUN APP_BUILD="$APP_BUILD" npm run build \
+ && mkdir -p dist/exercise-media/still dist/exercise-media/clip
 
 FROM nginxinc/nginx-unprivileged:1.30.6-alpine
 # Same reason as in api/Dockerfile: alpine fixes land faster than the nginx image is rebuilt.
@@ -75,9 +75,6 @@ COPY web/nginx.conf.template /etc/nginx/templates/default.conf.template
 # before the template rendering at 20.
 COPY --chmod=755 web/05-check-base-path.sh /docker-entrypoint.d/
 COPY --from=build /app/frontend/dist /usr/share/nginx/html
-# External CDN media architecture (Zero server bloat per requirement 11):
-# Media files are streamed from CDN/External repository, keeping the local image lean and fast.
-RUN mkdir -p /usr/share/nginx/html/exercise-media/still /usr/share/nginx/html/exercise-media/clip
 
 # Set Default ENVs for nginx
 ENV NGINX_PORT=80
