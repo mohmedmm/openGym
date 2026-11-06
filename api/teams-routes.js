@@ -6,6 +6,23 @@ import * as db from './db-pg.js';
 export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
   const routes = {};
 
+  const rateLimitMap = new Map();
+  function checkRateLimit(key, maxLimit = 120, windowMs = 60000) {
+    const now = Date.now();
+    let record = rateLimitMap.get(key);
+    if (!record || now - record.start > windowMs) {
+      rateLimitMap.set(key, { start: now, count: 1 });
+      return false;
+    }
+    record.count++;
+    return record.count > maxLimit;
+  }
+
+  function sanitizeString(str, maxLen = 1000) {
+    if (typeof str !== 'string') return '';
+    return str.replace(/<[^>]*>/g, '').trim().slice(0, maxLen);
+  }
+
   // Helper to parse JSON body
   async function readBody(req) {
     return new Promise((resolve, reject) => {
@@ -152,6 +169,12 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
       return sendJson(res, 400, { error: 'Missing required override fields' });
     }
 
+    const planOwner = await db.getTeamPlanOwner(teamPlanId);
+    if (!planOwner) return sendJson(res, 404, { error: 'Plan not found' });
+    if (planOwner.head_coach_uid !== user.id && !isAdmin(user)) {
+      return sendJson(res, 403, { error: 'Only team coach can set overrides' });
+    }
+
     const override = await db.upsertPlanOverride({
       team_plan_id: teamPlanId,
       uid: targetUid,
@@ -163,7 +186,7 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
       custom_target_weight: body.custom_target_weight || body.customTargetWeight,
       custom_rest_sec: body.custom_rest_sec || body.customRestSec,
       custom_rpe_rir: body.custom_rpe_rir || body.customRpeRir,
-      coach_notes: body.coach_notes || body.coachNotes
+      coach_notes: sanitizeString(body.coach_notes || body.coachNotes, 500)
     });
     sendJson(res, 200, { success: true, override });
   };
@@ -178,6 +201,12 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
 
     if (!teamPlanId || !Array.isArray(targetUids)) {
       return sendJson(res, 400, { error: 'Invalid batch sync request' });
+    }
+
+    const planOwner = await db.getTeamPlanOwner(teamPlanId);
+    if (!planOwner) return sendJson(res, 404, { error: 'Plan not found' });
+    if (planOwner.head_coach_uid !== user.id && !isAdmin(user)) {
+      return sendJson(res, 403, { error: 'Only team coach can sync overrides' });
     }
 
     const saved = [];
@@ -195,7 +224,7 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
             custom_target_weight: ov.custom_target_weight || ov.customTargetWeight,
             custom_rest_sec: ov.custom_rest_sec || ov.customRestSec,
             custom_rpe_rir: ov.custom_rpe_rir || ov.customRpeRir,
-            coach_notes: ov.coach_notes || ov.coachNotes
+            coach_notes: sanitizeString(ov.coach_notes || ov.coachNotes, 500)
           });
           saved.push(resOv);
         }
@@ -204,11 +233,21 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
     sendJson(res, 200, { success: true, count: saved.length });
   };
 
+  // 7.5 ALL ACCESSIBLE TEAM PLANS (FOR CENTRALIZED PLANS TAB)
+  routes['GET /api/teams/all-plans'] = async (req, res) => {
+    const user = await getUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
+    const plans = await db.getAllTeamPlans(user.id);
+    sendJson(res, 200, { plans });
+  };
+
   // 8. COACH LIVE BOARD
   routes['GET /api/coach/live-board'] = async (req, res) => {
     const user = await getUser(req);
     if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
-    const board = await db.getCoachLiveBoard(user.id);
+    const url = new URL(req.url, 'http://localhost');
+    const teamId = url.searchParams.get('teamId') || null;
+    const board = await db.getCoachLiveBoard(user.id, teamId);
     sendJson(res, 200, { liveBoard: board });
   };
 
@@ -217,9 +256,11 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
     const user = await getUser(req);
     if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
     const body = await readBody(req);
+    const videoUrl = typeof body.video_url === 'string' && /^https?:\/\//i.test(body.video_url.trim()) ? body.video_url.trim() : '';
     const log = await db.logWorkout({
       ...body,
-      uid: user.id
+      uid: user.id,
+      video_url: videoUrl
     });
     sendJson(res, 200, { success: true, workout: log });
   };
@@ -231,13 +272,17 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
     if (!body.trainee_uid || !body.workout_id || !body.comment) {
       return sendJson(res, 400, { error: 'Missing review fields' });
     }
+    const cleanVideoUrl = typeof body.video_feedback_url === 'string' && /^https?:\/\//i.test(body.video_feedback_url.trim()) ? body.video_feedback_url.trim() : '';
+    const cleanComment = String(body.comment).slice(0, 2000);
+    const cleanRating = Math.max(1, Math.min(5, parseInt(body.rating, 10) || 5));
+
     const review = await db.addCoachReview({
       coach_uid: user.id,
       trainee_uid: body.trainee_uid,
       workout_id: body.workout_id,
-      comment: body.comment,
-      video_feedback_url: body.video_feedback_url,
-      rating: body.rating
+      comment: cleanComment,
+      video_feedback_url: cleanVideoUrl,
+      rating: cleanRating
     });
     sendJson(res, 200, { success: true, review });
   };
@@ -251,6 +296,11 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
     const targetId = url.searchParams.get('id');
     if (!targetId) return sendJson(res, 400, { error: 'id required' });
 
+    const hasAccess = await db.canUserAccessChat(user.id, targetType, targetId);
+    if (!hasAccess && !isAdmin(user)) {
+      return sendJson(res, 403, { error: 'Forbidden: You do not have access to this chat' });
+    }
+
     const messages = await db.getChatMessages(targetType, targetId);
     sendJson(res, 200, { messages });
   };
@@ -258,16 +308,30 @@ export function createTeamsRouter({ getUser, isAdmin, isOwner }) {
   routes['POST /api/chat'] = async (req, res) => {
     const user = await getUser(req);
     if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
+    if (checkRateLimit(`chat_${user.id}`, 60, 60000)) {
+      return sendJson(res, 429, { error: 'Too many messages. Please slow down.' });
+    }
     const body = await readBody(req);
     if (!body.target_id || !body.message) {
       return sendJson(res, 400, { error: 'target_id and message required' });
     }
+    const targetType = body.target_type || 'team';
+    const hasAccess = await db.canUserAccessChat(user.id, targetType, body.target_id);
+    if (!hasAccess && !isAdmin(user)) {
+      return sendJson(res, 403, { error: 'Forbidden: You do not have access to this chat' });
+    }
+
+    const cleanMsg = sanitizeString(body.message, 1500);
+    if (!cleanMsg) return sendJson(res, 400, { error: 'Message cannot be empty' });
+
+    const cleanMedia = typeof body.media_url === 'string' && /^https?:\/\//i.test(body.media_url.trim()) ? body.media_url.trim() : null;
+
     const msg = await db.sendChatMessage({
       sender_uid: user.id,
-      target_type: body.target_type || 'team',
+      target_type: targetType,
       target_id: body.target_id,
-      message: body.message,
-      media_url: body.media_url
+      message: cleanMsg,
+      media_url: cleanMedia
     });
     sendJson(res, 201, { success: true, message: msg });
   };

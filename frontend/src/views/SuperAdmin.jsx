@@ -38,7 +38,7 @@ export default function SuperAdmin() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 700, color: 'var(--label)' }}>
-            لوحة الإدارة العامة للمنصة 🛡️
+            لوحة الإدارة العامة للمنصة
           </h1>
           <div style={{ fontSize: '0.85rem', color: 'var(--label-2)', marginTop: 4 }}>
             نطاق الخدمة: <b>https://gym.nbox.ly</b> • رصد شامل للحسابات، الفرق، وأداء النظام
@@ -73,7 +73,7 @@ export default function SuperAdmin() {
 
       <div className="card" style={{ background: 'var(--surface)', padding: 20, borderRadius: 16, border: '1px solid var(--sep-op)' }}>
         <h3 style={{ margin: '0 0 12px 0', fontSize: '1.1rem', color: 'var(--label)' }}>
-          ⚙️ إعدادات النشر وعزل الاستضافة
+          إعدادات النشر وعزل الاستضافة
         </h3>
         <ul style={{ margin: 0, paddingRight: 20, fontSize: '0.85rem', color: 'var(--label-2)', lineHeight: 1.8 }}>
           <li><b>النطاق:</b> https://gym.nbox.ly (SSL Let's Encrypt نشط وآمن).</li>
@@ -86,3 +86,4 @@ export default function SuperAdmin() {
     </div>
   )
 }
+

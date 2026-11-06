@@ -194,7 +194,7 @@ export default function TeamPlanCustomizer() {
             ← العودة للفرق
           </button>
           <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700, color: 'var(--label)' }}>
-            البرنامج الجماعي مع التخصيص الفردي 📋
+            البرنامج الجماعي مع التخصيص الفردي
           </h1>
           <div style={{ fontSize: '0.85rem', color: 'var(--label-2)', marginTop: 4 }}>
             الفريق: <b>{team?.name || 'فريق التدريب'}</b> • قالب موحد مع مراعاة أهداف كل متدرب
@@ -205,7 +205,7 @@ export default function TeamPlanCustomizer() {
           onClick={requestAiAssistance}
           style={{ padding: '8px 14px', borderRadius: 10, background: 'var(--surface-2)', color: 'var(--acc)', border: '1px solid var(--acc-line)', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
         >
-          🤖 {loadingAi ? 'جاري التحليل...' : 'اقتراحات الذكاء الاصطناعي'}
+          {loadingAi ? 'جاري التحليل...' : 'اقتراحات الذكاء الاصطناعي'}
         </button>
       </div>
 
@@ -214,9 +214,11 @@ export default function TeamPlanCustomizer() {
         <div style={{ background: 'var(--surface-2)', padding: 16, borderRadius: 14, marginBottom: 20, border: '1px solid var(--acc-line)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <h4 style={{ margin: 0, color: 'var(--acc)', fontSize: '1rem' }}>
-              💡 توصيات الذكاء الاصطناعي العلمية لهدف: {selectedMember?.primary_goal || 'اللياقة العامة'}
+              توصيات الذكاء الاصطناعي العلمية لهدف: {selectedMember?.primary_goal || 'اللياقة العامة'}
             </h4>
-            <button onClick={() => setAiSuggestions(null)} style={{ background: 'transparent', border: 'none', color: 'var(--label-2)', cursor: 'pointer' }}>✕</button>
+            <button onClick={() => setAiSuggestions(null)} style={{ background: 'transparent', border: 'none', color: 'var(--label-2)', cursor: 'pointer', fontSize: '1rem', lineHeight: 1 }} aria-label="Close">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
           <div style={{ fontSize: '0.8rem', color: 'var(--label-2)', marginBottom: 10 }}>
             {aiSuggestions.advisory_note}
@@ -247,7 +249,7 @@ export default function TeamPlanCustomizer() {
               fontWeight: 700, fontSize: '0.9rem'
             }}
           >
-            🏛️ قالب الفريق الموحد
+            قالب الفريق الموحد
           </button>
 
           {team?.members?.filter(m => m.role === 'trainee').map(m => (
@@ -261,7 +263,7 @@ export default function TeamPlanCustomizer() {
                 fontWeight: selectedMember?.uid === m.uid ? 700 : 500, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 6
               }}
             >
-              <span>👤 {m.uid}</span>
+              <span>{m.display_name || m.uid}</span>
               <span style={{ fontSize: '0.75rem', opacity: 0.8, background: 'rgba(0,0,0,0.2)', padding: '2px 6px', borderRadius: 6 }}>
                 {m.primary_goal || 'عام'}
               </span>
@@ -439,3 +441,4 @@ export default function TeamPlanCustomizer() {
     </div>
   )
 }
+

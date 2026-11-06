@@ -211,6 +211,13 @@ async function createTables() {
     CREATE INDEX IF NOT EXISTS idx_gym_workouts_uid ON gym_workouts_logged(uid);
     CREATE INDEX IF NOT EXISTS idx_gym_workouts_team ON gym_workouts_logged(team_id);
     CREATE INDEX IF NOT EXISTS idx_gym_chat_target ON gym_chat_messages(target_type, target_id);
+
+    -- Schema upgrades
+    ALTER TABLE gym_profiles ADD COLUMN IF NOT EXISTS display_name VARCHAR(128);
+    ALTER TABLE gym_workouts_logged ADD COLUMN IF NOT EXISTS current_exercise VARCHAR(128);
+    ALTER TABLE gym_workouts_logged ADD COLUMN IF NOT EXISTS sets_done INT DEFAULT 0;
+    ALTER TABLE gym_workouts_logged ADD COLUMN IF NOT EXISTS total_sets INT DEFAULT 0;
+    ALTER TABLE gym_workouts_logged ADD COLUMN IF NOT EXISTS total_volume_kg NUMERIC(10,2) DEFAULT 0;
   `;
   await pool.query(schema);
   console.log('✅ PostgreSQL tables and indexes verified.');
@@ -228,14 +235,16 @@ export async function getProfile(uid) {
 
 export async function upsertProfile(uid, data) {
   const now = Date.now();
+  const displayName = data.display_name || data.displayName || null;
   if (pool) {
     const q = `
       INSERT INTO gym_profiles (
-        uid, primary_goal, current_weight, target_weight, height_cm, age,
+        uid, display_name, primary_goal, current_weight, target_weight, height_cm, age,
         experience_level, days_per_week, session_duration_mins, available_equipment,
         preferred_exercises, avoid_exercises, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       ON CONFLICT (uid) DO UPDATE SET
+        display_name = COALESCE(EXCLUDED.display_name, gym_profiles.display_name),
         primary_goal = EXCLUDED.primary_goal,
         current_weight = EXCLUDED.current_weight,
         target_weight = EXCLUDED.target_weight,
@@ -252,6 +261,7 @@ export async function upsertProfile(uid, data) {
     `;
     const res = await pool.query(q, [
       uid,
+      displayName,
       data.primary_goal || 'General Fitness',
       data.current_weight || null,
       data.target_weight || null,
@@ -270,10 +280,10 @@ export async function upsertProfile(uid, data) {
   const db = loadFallbackData();
   let p = db.profiles.find(x => x.uid === uid);
   if (!p) {
-    p = { uid, ...data, updated_at: now };
+    p = { uid, display_name: displayName, ...data, updated_at: now };
     db.profiles.push(p);
   } else {
-    Object.assign(p, data, { updated_at: now });
+    Object.assign(p, data, { display_name: displayName || p.display_name, updated_at: now });
   }
   saveFallbackData();
   return p;
@@ -426,6 +436,23 @@ export async function getPlanOverrides(planId, uid = null) {
   return db.member_plan_overrides.filter(o => o.team_plan_id === planId && (!uid || o.uid === uid));
 }
 
+export async function getTeamPlanOwner(planId) {
+  if (pool) {
+    const res = await pool.query(`
+      SELECT p.id as plan_id, p.team_id, t.head_coach_uid
+      FROM gym_team_plans p
+      JOIN gym_teams t ON p.team_id = t.id
+      WHERE p.id = $1
+    `, [planId]);
+    return res.rows[0] || null;
+  }
+  const db = loadFallbackData();
+  const plan = db.team_plans.find(p => p.id === planId);
+  if (!plan) return null;
+  const team = db.teams.find(t => t.id === plan.team_id);
+  return { plan_id: plan.id, team_id: plan.team_id, head_coach_uid: team?.head_coach_uid || null };
+}
+
 export async function upsertPlanOverride({ team_plan_id, uid, day_id, exercise_id, custom_sets, custom_reps, custom_weight, custom_intensity, custom_rest_seconds, alt_exercise_id, alt_notes }) {
   const now = Date.now();
   const id = `ovr_${team_plan_id}_${uid}_${day_id}_${exercise_id}`.replace(/[^a-zA-Z0-9_]/g, '');
@@ -468,29 +495,39 @@ export async function upsertPlanOverride({ team_plan_id, uid, day_id, exercise_i
 }
 
 // ----------------- WORKOUT LOGGING & LIVE BOARD -----------------
-export async function logWorkout({ id, uid, team_id, plan_id, routine_name, started_at, finished_at, duration_seconds, exercises_json, notes, status, video_url }) {
+export async function logWorkout({
+  id, uid, team_id, plan_id, routine_name, started_at, finished_at,
+  duration_seconds, exercises_json, notes, status, video_url,
+  current_exercise, sets_done, total_sets, total_volume_kg
+}) {
   const now = Date.now();
   const workoutId = id || 'wlog_' + Math.random().toString(36).substring(2, 12);
   if (pool) {
     const q = `
       INSERT INTO gym_workouts_logged (
         id, uid, team_id, plan_id, routine_name, started_at, finished_at,
-        duration_seconds, exercises_json, notes, status, video_url, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        duration_seconds, exercises_json, notes, status, video_url,
+        current_exercise, sets_done, total_sets, total_volume_kg, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       ON CONFLICT (id) DO UPDATE SET
-        finished_at = EXCLUDED.finished_at,
-        duration_seconds = EXCLUDED.duration_seconds,
+        finished_at = COALESCE(EXCLUDED.finished_at, gym_workouts_logged.finished_at),
+        duration_seconds = COALESCE(EXCLUDED.duration_seconds, gym_workouts_logged.duration_seconds),
         exercises_json = EXCLUDED.exercises_json,
         notes = EXCLUDED.notes,
         status = EXCLUDED.status,
-        video_url = EXCLUDED.video_url
+        video_url = EXCLUDED.video_url,
+        current_exercise = COALESCE(EXCLUDED.current_exercise, gym_workouts_logged.current_exercise),
+        sets_done = COALESCE(EXCLUDED.sets_done, gym_workouts_logged.sets_done),
+        total_sets = COALESCE(EXCLUDED.total_sets, gym_workouts_logged.total_sets),
+        total_volume_kg = COALESCE(EXCLUDED.total_volume_kg, gym_workouts_logged.total_volume_kg)
       RETURNING *;
     `;
     const res = await pool.query(q, [
       workoutId, uid, team_id || null, plan_id || null, routine_name || 'Workout',
       started_at || now, finished_at || null, duration_seconds || 0,
       JSON.stringify(exercises_json || []), notes || '', status || 'completed',
-      video_url || '', now
+      video_url || '', current_exercise || null, sets_done || 0,
+      total_sets || 0, total_volume_kg || 0, now
     ]);
     return res.rows[0];
   }
@@ -502,7 +539,9 @@ export async function logWorkout({ id, uid, team_id, plan_id, routine_name, star
     routine_name: routine_name || 'Workout', started_at: started_at || now,
     finished_at: finished_at || null, duration_seconds: duration_seconds || 0,
     exercises_json: exercises_json || [], notes: notes || '', status: status || 'completed',
-    video_url: video_url || '', created_at: now
+    video_url: video_url || '', current_exercise: current_exercise || null,
+    sets_done: sets_done || 0, total_sets: total_sets || 0,
+    total_volume_kg: total_volume_kg || 0, created_at: now
   };
   if (!w) db.workouts_logged.push(item);
   else Object.assign(w, item);
@@ -510,53 +549,131 @@ export async function logWorkout({ id, uid, team_id, plan_id, routine_name, star
   return item;
 }
 
-export async function getCoachLiveBoard(coachUid) {
+export async function getCoachLiveBoard(coachUid, filterTeamId = null) {
   const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
   if (pool) {
-    // Teams coached by this user
-    const teamsRes = await pool.query('SELECT id, name FROM gym_teams WHERE head_coach_uid = $1', [coachUid]);
-    const teamIds = teamsRes.rows.map(t => t.id);
-    if (!teamIds.length) return { in_progress: [], completed: [], missed: [] };
+    // 1. Teams coached or participated in
+    let teamsQuery = 'SELECT id, name FROM gym_teams WHERE head_coach_uid = $1';
+    let teamsParams = [coachUid];
+    if (filterTeamId) {
+      teamsQuery += ' AND id = $2';
+      teamsParams.push(filterTeamId);
+    }
+    const teamsRes = await pool.query(teamsQuery, teamsParams);
+    const teams = teamsRes.rows;
+    const teamIds = teams.map(t => t.id);
 
-    // Members of these teams
+    if (!teamIds.length) {
+      return { in_progress: [], completed: [], missed: [], teams: [], roster: [] };
+    }
+
+    // 2. Members across these teams
     const membersRes = await pool.query(`
-      SELECT tm.uid, tm.team_id, t.name as team_name, p.primary_goal
+      SELECT tm.uid, tm.team_id, tm.role, tm.joined_at, t.name as team_name,
+             COALESCE(p.display_name, tm.uid) as display_name,
+             p.primary_goal, p.experience_level, p.current_weight
       FROM gym_team_members tm
       JOIN gym_teams t ON tm.team_id = t.id
       LEFT JOIN gym_profiles p ON tm.uid = p.uid
-      WHERE tm.team_id = ANY($1) AND tm.role = 'trainee'
+      WHERE tm.team_id = ANY($1)
+      ORDER BY tm.joined_at ASC
     `, [teamIds]);
 
+    const members = membersRes.rows;
+    const memberUids = members.map(m => m.uid);
+
+    // 3. Workouts logged in the last 24h
     const logsRes = await pool.query(`
-      SELECT w.*, r.comment as coach_comment
+      SELECT w.*,
+             r.comment as coach_comment,
+             r.rating as coach_rating,
+             r.video_feedback_url,
+             COALESCE(p.display_name, w.uid) as display_name,
+             t.name as team_name
       FROM gym_workouts_logged w
       LEFT JOIN gym_coach_reviews r ON w.id = r.workout_id
-      WHERE (w.team_id = ANY($1) OR w.uid = ANY($2)) AND w.started_at > $3
+      LEFT JOIN gym_profiles p ON w.uid = p.uid
+      LEFT JOIN gym_teams t ON w.team_id = t.id
+      WHERE (w.team_id = ANY($1) OR w.uid = ANY($2) OR w.uid = $3)
+        AND w.started_at > $4
       ORDER BY w.started_at DESC
-    `, [teamIds, membersRes.rows.map(m => m.uid), oneDayAgo]);
+    `, [teamIds, memberUids.length ? memberUids : [coachUid], coachUid, oneDayAgo]);
 
     const active = [];
     const done = [];
-    const memberUidsSeen = new Set();
+    const memberWorkoutMap = new Map();
 
     for (const log of logsRes.rows) {
-      memberUidsSeen.add(log.uid);
+      if (!memberWorkoutMap.has(log.uid)) {
+        memberWorkoutMap.set(log.uid, log);
+      }
       if (log.status === 'in_progress') active.push(log);
       else done.push(log);
     }
 
-    const missed = membersRes.rows.filter(m => !memberUidsSeen.has(m.uid));
-    return { in_progress: active, completed: done, missed };
+    // 4. Build unified attendance & tracking roster
+    const roster = members.map(m => {
+      const latest = memberWorkoutMap.get(m.uid);
+      if (latest && latest.status === 'in_progress') {
+        return {
+          uid: m.uid,
+          display_name: m.display_name,
+          team_id: m.team_id,
+          team_name: m.team_name,
+          role: m.role,
+          primary_goal: m.primary_goal,
+          status: 'in_progress',
+          workout_id: latest.id,
+          routine_name: latest.routine_name,
+          started_at: latest.started_at,
+          current_exercise: latest.current_exercise || 'حصة تدريبية جارية',
+          sets_done: latest.sets_done || 0,
+          total_sets: latest.total_sets || 0,
+          total_volume_kg: latest.total_volume_kg || 0
+        };
+      } else if (latest && latest.status === 'completed') {
+        return {
+          uid: m.uid,
+          display_name: m.display_name,
+          team_id: m.team_id,
+          team_name: m.team_name,
+          role: m.role,
+          primary_goal: m.primary_goal,
+          status: 'completed',
+          workout_id: latest.id,
+          routine_name: latest.routine_name,
+          started_at: latest.started_at,
+          finished_at: latest.finished_at,
+          duration_seconds: latest.duration_seconds,
+          total_volume_kg: latest.total_volume_kg || 0,
+          coach_comment: latest.coach_comment,
+          coach_rating: latest.coach_rating
+        };
+      } else {
+        return {
+          uid: m.uid,
+          display_name: m.display_name,
+          team_id: m.team_id,
+          team_name: m.team_name,
+          role: m.role,
+          primary_goal: m.primary_goal,
+          status: 'not_started'
+        };
+      }
+    });
+
+    const missed = roster.filter(r => r.status === 'not_started');
+    return { in_progress: active, completed: done, missed, teams, roster };
   }
 
   const db = loadFallbackData();
-  const myTeams = db.teams.filter(t => t.head_coach_uid === coachUid);
+  const myTeams = db.teams.filter(t => t.head_coach_uid === coachUid && (!filterTeamId || t.id === filterTeamId));
   const myTeamIds = new Set(myTeams.map(t => t.id));
-  const myMembers = db.team_members.filter(m => myTeamIds.has(m.team_id) && m.role === 'trainee');
+  const myMembers = db.team_members.filter(m => myTeamIds.has(m.team_id));
   const myMemberUids = new Set(myMembers.map(m => m.uid));
 
   const recentLogs = db.workouts_logged.filter(w =>
-    (myTeamIds.has(w.team_id) || myMemberUids.has(w.uid)) && (w.started_at || 0) > oneDayAgo
+    (myTeamIds.has(w.team_id) || myMemberUids.has(w.uid) || w.uid === coachUid) && (w.started_at || 0) > oneDayAgo
   );
 
   const active = recentLogs.filter(w => w.status === 'in_progress');
@@ -565,10 +682,62 @@ export async function getCoachLiveBoard(coachUid) {
   const missed = myMembers.filter(m => !seenUids.has(m.uid)).map(m => {
     const p = db.profiles.find(x => x.uid === m.uid) || {};
     const t = db.teams.find(x => x.id === m.team_id) || {};
-    return { uid: m.uid, team_id: m.team_id, team_name: t.name, primary_goal: p.primary_goal };
+    return {
+      uid: m.uid,
+      display_name: p.display_name || m.uid,
+      team_id: m.team_id,
+      team_name: t.name,
+      role: m.role,
+      primary_goal: p.primary_goal,
+      status: 'not_started'
+    };
   });
 
-  return { in_progress: active, completed: done, missed };
+  const roster = myMembers.map(m => {
+    const latest = recentLogs.find(w => w.uid === m.uid);
+    const p = db.profiles.find(x => x.uid === m.uid) || {};
+    const t = db.teams.find(x => x.id === m.team_id) || {};
+    return {
+      uid: m.uid,
+      display_name: p.display_name || m.uid,
+      team_id: m.team_id,
+      team_name: t.name,
+      role: m.role,
+      primary_goal: p.primary_goal,
+      status: latest ? latest.status : 'not_started',
+      workout_id: latest?.id,
+      routine_name: latest?.routine_name,
+      started_at: latest?.started_at,
+      finished_at: latest?.finished_at,
+      current_exercise: latest?.current_exercise,
+      sets_done: latest?.sets_done || 0,
+      total_sets: latest?.total_sets || 0,
+      total_volume_kg: latest?.total_volume_kg || 0
+    };
+  });
+
+  return { in_progress: active, completed: done, missed, teams: myTeams, roster };
+}
+
+export async function getAllTeamPlans(userUid) {
+  if (pool) {
+    const res = await pool.query(`
+      SELECT p.*, t.name as team_name, t.head_coach_uid
+      FROM gym_team_plans p
+      JOIN gym_teams t ON p.team_id = t.id
+      WHERE t.head_coach_uid = $1
+         OR t.id IN (SELECT team_id FROM gym_team_members WHERE uid = $1)
+      ORDER BY p.updated_at DESC
+    `, [userUid]);
+    return res.rows;
+  }
+  const db = loadFallbackData();
+  const myTeams = db.teams.filter(t => t.head_coach_uid === userUid || (db.team_members.some(m => m.team_id === t.id && m.uid === userUid)));
+  const teamIds = new Set(myTeams.map(t => t.id));
+  return db.team_plans.filter(p => teamIds.has(p.team_id)).map(p => {
+    const t = db.teams.find(x => x.id === p.team_id) || {};
+    return { ...p, team_name: t.name, head_coach_uid: t.head_coach_uid };
+  });
 }
 
 export async function addCoachReview({ coach_uid, trainee_uid, workout_id, comment, video_feedback_url, rating }) {
@@ -608,6 +777,38 @@ export async function sendChatMessage({ sender_uid, target_type, target_id, mess
   db.chat_messages.push(item);
   saveFallbackData();
   return item;
+}
+
+export async function canUserAccessChat(uid, target_type, target_id) {
+  if (target_type === 'team') {
+    if (pool) {
+      const res = await pool.query(`
+        SELECT 1 FROM gym_teams t
+        LEFT JOIN gym_team_members tm ON tm.team_id = t.id AND tm.uid = $1
+        WHERE t.id = $2 AND (t.head_coach_uid = $1 OR tm.uid = $1)
+      `, [uid, target_id]);
+      return !!res.rows[0];
+    }
+    const db = loadFallbackData();
+    const team = db.teams.find(t => t.id === target_id);
+    if (!team) return false;
+    if (team.head_coach_uid === uid) return true;
+    return db.team_members.some(m => m.team_id === target_id && m.uid === uid);
+  } else if (target_type === 'trainee') {
+    if (uid === target_id) return true;
+    if (pool) {
+      const res = await pool.query(`
+        SELECT 1 FROM gym_teams t
+        JOIN gym_team_members tm ON tm.team_id = t.id
+        WHERE t.head_coach_uid = $1 AND tm.uid = $2
+      `, [uid, target_id]);
+      return !!res.rows[0];
+    }
+    const db = loadFallbackData();
+    const coachedTeamIds = db.teams.filter(t => t.head_coach_uid === uid).map(t => t.id);
+    return db.team_members.some(m => coachedTeamIds.includes(m.team_id) && m.uid === target_id);
+  }
+  return false;
 }
 
 export async function getChatMessages(target_type, target_id, limit = 50) {

@@ -101,7 +101,7 @@ export default function Nutrition() {
             ← العودة للرئيسية
           </button>
           <h1 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 700, color: 'var(--label)' }}>
-            متابعة التغذية والقياسات 🥗
+            متابعة التغذية والقياسات
           </h1>
           <div style={{ fontSize: '0.85rem', color: 'var(--label-2)', marginTop: 4 }}>
             سجل السعرات اليومية، البروتين، الماء، وساعات النوم لدعم استشفاء العضلات
@@ -229,7 +229,7 @@ export default function Nutrition() {
         <div style={{ background: 'var(--surface-2)', padding: 14, borderRadius: 12, marginBottom: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
             <div>
-              <b style={{ color: 'var(--teal)' }}>💧 شرب الماء:</b> {form.water_ml} مل / {(form.water_ml / 1000).toFixed(1)} لتر
+              <b style={{ color: 'var(--teal)' }}>استهلاك الماء والسوائل:</b> {form.water_ml} مل / {(form.water_ml / 1000).toFixed(1)} لتر
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
               <button
@@ -273,3 +273,4 @@ export default function Nutrition() {
     </div>
   )
 }
+

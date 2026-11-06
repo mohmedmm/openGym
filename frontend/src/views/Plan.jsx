@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
@@ -184,11 +184,17 @@ export default function Plan() {
     </div>
     <input ref={fileRef} type="file" accept="application/json,.json" onChange={pickFile} hidden />
     <Segmented className="plan-views" tour="plan-views" value={view} onChange={setView}
-      options={[{ value: 'schedule', label: t('Schedule') }, { value: 'routines', label: t('Routines') }]} />
+      options={[
+        { value: 'schedule', label: t('Schedule') || 'الجدول' },
+        { value: 'routines', label: 'خطط منفردة' },
+        { value: 'teams', label: 'خطط الفريق' }
+      ]} />
     {progChip && <button type="button" className="prog-strip" onClick={() => nav('/plan/programmes')}>
       <Icon name="calendar" /><span className="grow">{S.programmes?.[S.programme?.id]?.name || t('Programme')}</span><span className="tag acc">{progChip}</span>
     </button>}
-    {view === 'routines'
+    {view === 'teams'
+      ? <TeamPlansHub S={S} update={update} nav={nav} />
+      : view === 'routines'
       ? <Routines S={S} update={update} nav={nav} />
       : <Schedule S={S} update={update} nav={nav} mode={mode} />}
   </div>
@@ -415,8 +421,59 @@ function Schedule({ S, update, nav, mode }) {
 function Routines({ S, update, nav }) {
   const [edit, setEdit] = useState(false)
   const [flash, setFlash] = useState(null)
+  const [copyTargetRoutine, setCopyTargetRoutine] = useState(null)
+  const [teams, setTeams] = useState([])
+  const [selectedTeamId, setSelectedTeamId] = useState('')
+  const toast = useUI(s => s.toast)
   const swipe = workoutControls(S).swipeSets
   const routines = S.routines
+
+  useEffect(() => {
+    fetch('/api/teams')
+      .then(r => r.ok ? r.json() : { teams: [] })
+      .then(d => {
+        setTeams(d.teams || [])
+        if (d.teams?.length) setSelectedTeamId(d.teams[0].id)
+      })
+      .catch(() => {})
+  }, [])
+
+  async function handleCopyRoutineToTeam(e) {
+    e.preventDefault()
+    if (!copyTargetRoutine || !selectedTeamId) return
+    try {
+      const res = await fetch('/api/teams/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          team_id: selectedTeamId,
+          name: copyTargetRoutine.name,
+          description: 'خطة منسوخة من الخطط المنفردة',
+          days_json: [
+            {
+              day: copyTargetRoutine.name,
+              exercises: copyTargetRoutine.ex.map(e => ({
+                id: e.id,
+                name: e.id,
+                sets: e.sets?.length || 3,
+                reps: '8-10',
+                rest: 90
+              }))
+            }
+          ]
+        })
+      })
+      if (res.ok) {
+        toast(`تم نسخ "${copyTargetRoutine.name}" إلى خطة الفريق بنجاح!`)
+        setCopyTargetRoutine(null)
+      } else {
+        toast('تعذر نسخ الخطة إلى الفريق')
+      }
+    } catch (e) {
+      toast('خطأ في الاتصال بالخادم')
+    }
+  }
+
   // The order of this list is the order of `S.routines`, and every other screen reads the same
   // array (the Start screen, the day sheets, the routine pickers), so moving a routine here moves
   // it everywhere (#142). Reordering lives behind Edit, like on an iPhone.
@@ -431,11 +488,7 @@ function Routines({ S, update, nav }) {
     update(s => { s.routines.push(r) })
     nav('/plan/r/' + r.id)
   }
-  // The same delete as RoutineEdit's "Delete routine" button (lib/routines.js), with an Undo in
-  // place of its confirm (v1.3.11): the swipe and the edit-mode minus both land here.
   const remove = r => deleteRoutineWithUndo(r.id)
-  // The swipe's other side: a copy right below the original, named the way "Copy routine" names
-  // one, and staying on this list rather than opening it.
   const duplicate = r => {
     const copy = copyRoutine(r, t('Copy'))
     update(s => {
@@ -443,13 +496,10 @@ function Routines({ S, update, nav }) {
       s.routines.splice(at < 0 ? s.routines.length : at + 1, 0, copy)
     })
     setFlash({ id: copy.id, n: ++flashSeq })
-    // With its own Undo: the toast takes the place of any Undo still showing (one toast at a
-    // time), so the newest swipe is at least the one you can take back.
     useUI.getState().toast(t('Copied as “{0}”.', copy.name), { action: t('Undo'), onAction: () => {
       update(s => { if (s.routines.some(x => x.id === copy.id)) deleteRoutine(s, copy.id) })
     } })
   }
-  // The weekdays a routine is on, short, in the order the week runs.
   const order = weekOrder(weekStartOf(S))
   const daysOf = id => order.filter(d => [].concat(S.week[d] || []).includes(id)).map(d => t(DAYS[d]))
   const sub = r => [exCount(r.ex.length), daysOf(r.id).join(', ')].filter(Boolean).join(' · ')
@@ -476,10 +526,18 @@ function Routines({ S, update, nav }) {
             <span className="lrow-i"><Icon name={glyphOf(r.emoji)} /></span>
             <div className="grow"><div className="tt">{r.name}</div><div className="ss">{sub(r)}</div></div>
             <MiniBodyMap routines={[r]} body={S.body} />
+            {teams.length > 0 && (
+              <button
+                type="button"
+                className="iconbtn"
+                title="نسخ إلى خطة فريق"
+                onClick={e => { e.stopPropagation(); setCopyTargetRoutine(r); }}
+                style={{ marginLeft: 6, marginRight: 6, color: 'var(--acc)' }}
+              >
+                <Icon name="share" />
+              </button>
+            )}
             <Icon name="chevronRight" className="chev" /></div>
-          // Swipe (v1.3.11, Settings → Swipe actions): toward the start deletes with an Undo,
-          // toward the end duplicates. Edit's minus and the routine's own page stay the way in
-          // for a keyboard and a screen reader.
           return swipe
             ? <SwipeRow key={r.id} className="swrow-item" copyLabel={t('Duplicate')}
               onDelete={() => remove(r)} onCopy={() => duplicate(r)}
@@ -492,5 +550,398 @@ function Routines({ S, update, nav }) {
         <Button variant="tinted" icon="clipboard" onClick={starterPlanSheet}>{t('Load starter plan')}</Button>
       </EmptyState>
     </>}
+
+    {/* MODAL: COPY PERSONAL ROUTINE TO TEAM */}
+    {copyTargetRoutine && (
+      <div style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16
+      }}>
+        <div style={{
+          background: 'var(--surface)', padding: 20, borderRadius: 14,
+          maxWidth: 440, width: '100%', border: '1px solid var(--sep-op)', direction: 'rtl'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--label)' }}>
+              نسخ الخطة المنفردة إلى خطة فريق
+            </h3>
+            <button onClick={() => setCopyTargetRoutine(null)} style={{ background: 'transparent', border: 'none', color: 'var(--label-2)', cursor: 'pointer', display: 'flex', alignItems: 'center' }} aria-label="Close">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+
+          <form onSubmit={handleCopyRoutineToTeam}>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 4 }}>الخطة المنفردة المراد نسخها:</div>
+              <div style={{ fontWeight: 600, color: 'var(--label)' }}>{copyTargetRoutine.name} ({copyTargetRoutine.ex?.length || 0} تمرين)</div>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 6 }}>
+                اختر الفريق المستهدف:
+              </label>
+              <select
+                value={selectedTeamId}
+                onChange={e => setSelectedTeamId(e.target.value)}
+                required
+                style={{
+                  width: '100%', padding: '10px', borderRadius: 8,
+                  background: 'var(--surface-2)', border: '1px solid var(--sep-op)',
+                  color: 'var(--label)', fontSize: '0.85rem'
+                }}
+              >
+                {teams.map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => setCopyTargetRoutine(null)}
+                style={{
+                  padding: '8px 16px', borderRadius: 8, background: 'transparent',
+                  border: '1px solid var(--sep-op)', color: 'var(--label)', cursor: 'pointer'
+                }}
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                style={{
+                  padding: '8px 18px', borderRadius: 8, background: 'var(--acc)',
+                  border: 'none', color: '#fff', fontWeight: 600, cursor: 'pointer'
+                }}
+              >
+                تأكيد النسخ للفريق
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
   </>
+}
+
+/* ================================ Team Plans Hub ================================ */
+
+function TeamPlansHub({ S, update, nav }) {
+  const [plans, setPlans] = useState([])
+  const [teams, setTeams] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [newPlanTeamId, setNewPlanTeamId] = useState('')
+  const [newPlanName, setNewPlanName] = useState('')
+  const [newPlanDesc, setNewPlanDesc] = useState('')
+  const toast = useUI(s => s.toast)
+
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  async function loadData() {
+    setLoading(true)
+    try {
+      const [plansRes, teamsRes] = await Promise.all([
+        fetch('/api/teams/all-plans'),
+        fetch('/api/teams')
+      ])
+      if (plansRes.ok) {
+        const d = await plansRes.json()
+        setPlans(d.plans || [])
+      }
+      if (teamsRes.ok) {
+        const d = await teamsRes.json()
+        setTeams(d.teams || [])
+        if (d.teams?.length && !newPlanTeamId) {
+          setNewPlanTeamId(d.teams[0].id)
+        }
+      }
+    } catch (e) {
+      console.warn('Error loading team plans:', e)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function copyTeamPlanToPersonal(teamPlan) {
+    if (!teamPlan) return
+    const days = teamPlan.days_json || []
+    let allEx = []
+    if (Array.isArray(days)) {
+      days.forEach(d => {
+        if (Array.isArray(d.exercises)) {
+          d.exercises.forEach(ex => {
+            allEx.push({
+              id: ex.id || ex.exercise_id,
+              sets: Array(ex.sets || 3).fill().map(() => ({ w: ex.target_weight || 0, r: ex.reps || 10 }))
+            })
+          })
+        }
+      })
+    }
+
+    const newRoutine = {
+      id: uid(),
+      name: teamPlan.name || 'خطة فريق منسوخة',
+      emoji: DEFAULT_GLYPH,
+      ex: allEx
+    }
+
+    update(s => {
+      s.routines.push(newRoutine)
+    })
+    toast(`تم نسخ خطة "${teamPlan.name}" إلى خططك المنفردة بنجاح!`)
+  }
+
+  async function handleCreateTeamPlan(e) {
+    e.preventDefault()
+    if (!newPlanTeamId || !newPlanName.trim()) return
+    try {
+      const res = await fetch('/api/teams/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          team_id: newPlanTeamId,
+          name: newPlanName.trim(),
+          description: newPlanDesc.trim(),
+          days_json: [
+            {
+              day: 'اليوم الأول: الأساسي',
+              exercises: []
+            }
+          ]
+        })
+      })
+      if (res.ok) {
+        toast('تم إنشاء خطة الفريق بنجاح')
+        setShowCreateModal(false)
+        setNewPlanName('')
+        setNewPlanDesc('')
+        loadData()
+      } else {
+        toast('تعذر إنشاء خطة الفريق')
+      }
+    } catch (e) {
+      toast('خطأ في الاتصال بالخادم')
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--label)' }}>
+            خطط الفرق والمجموعات
+          </div>
+          <div style={{ fontSize: '0.8rem', color: 'var(--label-2)' }}>
+            إدارة القوالب الجماعية وإمكانية النسخ بين البرامج الشخصية وبرامج الفرق
+          </div>
+        </div>
+
+        {teams.length > 0 && (
+          <Button size="sm" variant="tinted" icon="plus" onClick={() => setShowCreateModal(true)}>
+            خطة فريق جديدة
+          </Button>
+        )}
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--label-2)' }}>
+          جاري تحميل خطط الفرق...
+        </div>
+      ) : plans.length === 0 ? (
+        <EmptyState icon="clipboard" title="لا توجد خطط فرق حالياً" text="يمكنك إنشاء خطة جديدة للفريق أو نسخ إحدى خططك المنفردة إلى الفريق.">
+          {teams.length > 0 ? (
+            <Button variant="tinted" icon="plus" onClick={() => setShowCreateModal(true)}>
+              إنشاء خطة فريق جديدة
+            </Button>
+          ) : (
+            <Button variant="tinted" icon="person" onClick={() => nav('/teams')}>
+              الانتقال إلى قسم الفرق
+            </Button>
+          )}
+        </EmptyState>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {plans.map(p => {
+            const daysCount = Array.isArray(p.days_json) ? p.days_json.length : 0
+            const exCountTotal = Array.isArray(p.days_json)
+              ? p.days_json.reduce((acc, d) => acc + (d.exercises?.length || 0), 0)
+              : 0
+
+            return (
+              <div
+                key={p.id}
+                style={{
+                  background: 'var(--surface)',
+                  borderRadius: 12,
+                  border: '1px solid var(--sep-op)',
+                  padding: 14
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--label)' }}>
+                      {p.name}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--label-2)', marginTop: 2 }}>
+                      الفريق: <b>{p.team_name}</b> • {daysCount} أيام تدريبية • {exCountTotal} تمرين
+                    </div>
+                    {p.description && (
+                      <div style={{ fontSize: '0.8rem', color: 'var(--label-2)', marginTop: 4 }}>
+                        {p.description}
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => copyTeamPlanToPersonal(p)}
+                      title="نسخ إلى خططي المنفردة"
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: 6,
+                        background: 'var(--surface-2)',
+                        color: 'var(--label)',
+                        border: '1px solid var(--sep-op)',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                        fontWeight: 500,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4
+                      }}
+                    >
+                      <Icon name="copy" /> نسخ للشخصي
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => nav(`/teams/plan?teamId=${p.team_id}&planId=${p.id}`)}
+                      style={{
+                        padding: '6px 14px',
+                        borderRadius: 6,
+                        background: 'var(--acc)',
+                        color: '#fff',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                        fontWeight: 600
+                      }}
+                    >
+                      تعديل وتخصيص الخطة
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* CREATE TEAM PLAN MODAL */}
+      {showCreateModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16
+        }}>
+          <div style={{
+            background: 'var(--surface)', padding: 20, borderRadius: 14,
+            maxWidth: 440, width: '100%', border: '1px solid var(--sep-op)', direction: 'rtl'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--label)' }}>
+                إنشاء خطة فريق جديدة
+              </h3>
+              <button onClick={() => setShowCreateModal(false)} style={{ background: 'transparent', border: 'none', color: 'var(--label-2)', cursor: 'pointer', display: 'flex', alignItems: 'center' }} aria-label="Close">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateTeamPlan}>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 6 }}>
+                  اختر الفريق:
+                </label>
+                <select
+                  value={newPlanTeamId}
+                  onChange={e => setNewPlanTeamId(e.target.value)}
+                  required
+                  style={{
+                    width: '100%', padding: '10px', borderRadius: 8,
+                    background: 'var(--surface-2)', border: '1px solid var(--sep-op)',
+                    color: 'var(--label)', fontSize: '0.85rem'
+                  }}
+                >
+                  {teams.map(t => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 6 }}>
+                  اسم الخطة الجماعية:
+                </label>
+                <input
+                  type="text"
+                  value={newPlanName}
+                  onChange={e => setNewPlanName(e.target.value)}
+                  placeholder="مثال: خطة الدفع والسحب والأرجل (PPL)"
+                  required
+                  style={{
+                    width: '100%', padding: '10px', borderRadius: 8,
+                    background: 'var(--surface-2)', border: '1px solid var(--sep-op)',
+                    color: 'var(--label)', fontSize: '0.85rem'
+                  }}
+                />
+              </div>
+
+              <div style={{ marginBottom: 18 }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--label-2)', marginBottom: 6 }}>
+                  الوصف والهدف من الخطة:
+                </label>
+                <textarea
+                  value={newPlanDesc}
+                  onChange={e => setNewPlanDesc(e.target.value)}
+                  placeholder="خطة تدريبية للمجموعة مع إمكانية التخصيص الفردي..."
+                  rows={2}
+                  style={{
+                    width: '100%', padding: '10px', borderRadius: 8,
+                    background: 'var(--surface-2)', border: '1px solid var(--sep-op)',
+                    color: 'var(--label)', fontSize: '0.85rem', resize: 'vertical'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateModal(false)}
+                  style={{
+                    padding: '8px 16px', borderRadius: 8, background: 'transparent',
+                    border: '1px solid var(--sep-op)', color: 'var(--label)', cursor: 'pointer'
+                  }}
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  style={{
+                    padding: '8px 18px', borderRadius: 8, background: 'var(--acc)',
+                    border: 'none', color: '#fff', fontWeight: 600, cursor: 'pointer'
+                  }}
+                >
+                  إنشاء الخطة
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }

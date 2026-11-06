@@ -76,11 +76,12 @@ export default function TeamChat() {
             ← العودة للفرق
           </button>
           <h2 style={{ margin: 0, fontSize: '1.4rem', color: 'var(--label)' }}>
-            {targetType === 'team' ? '💬 محادثة الفريق' : '👤 محادثة خاصة مع المدرب'}
+            {targetType === 'team' ? 'محادثة الفريق' : 'محادثة خاصة مع المدرب'}
           </h2>
         </div>
-        <span style={{ fontSize: '0.8rem', color: 'var(--label-2)', background: 'var(--surface-2)', padding: '4px 10px', borderRadius: 8 }}>
-          متصل 🟢
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--green)', background: 'var(--surface-2)', padding: '4px 10px', borderRadius: 8, fontWeight: 600 }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--green)' }} />
+          متصل
         </span>
       </div>
 
@@ -142,3 +143,4 @@ export default function TeamChat() {
     </div>
   )
 }
+

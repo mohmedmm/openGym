@@ -166,7 +166,7 @@ export default function Teams() {
             transition: 'all 0.15s ease'
           }}
         >
-          👤 متدرب مستقل
+          متدرب مستقل
         </button>
         <button
           onClick={() => setMode('coach')}
@@ -178,7 +178,7 @@ export default function Teams() {
             transition: 'all 0.15s ease'
           }}
         >
-          🏋️ مدرب الفرق ({coachedTeams.length})
+          مدرب الفرق ({coachedTeams.length})
         </button>
         <button
           onClick={() => setMode('trainee')}
@@ -190,7 +190,7 @@ export default function Teams() {
             transition: 'all 0.15s ease'
           }}
         >
-          👥 متدرب ضمن فريق ({joinedTeams.length})
+          متدرب ضمن فريق ({joinedTeams.length})
         </button>
       </div>
 
@@ -199,7 +199,7 @@ export default function Teams() {
         <div>
           <div className="card" style={{ background: 'var(--surface)', padding: 20, borderRadius: 16, border: '1px solid var(--sep-op)', marginBottom: 20 }}>
             <h3 style={{ margin: '0 0 14px 0', fontSize: '1.2rem', color: 'var(--label)' }}>
-              🎯 ملفك الرياضي الشخصي وأهدافك
+              الملف الرياضي الشخصي والأهداف
             </h3>
             <p style={{ fontSize: '0.9rem', color: 'var(--label-2)', margin: '0 0 16px 0', lineHeight: 1.5 }}>
               حدد هدفك ومستواك والمعدات المتوفرة لديك لتكييف البرامج والتمارين البديلة وفق قدراتك دون فرض أي التزام خارجي.
@@ -272,7 +272,7 @@ export default function Teams() {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
             <div className="card" style={{ background: 'var(--surface)', padding: 18, borderRadius: 16, border: '1px solid var(--sep-op)' }}>
-              <h4 style={{ margin: '0 0 8px 0', color: 'var(--label)' }}>📅 خطة التدريب الشخصية</h4>
+              <h4 style={{ margin: '0 0 8px 0', color: 'var(--label)' }}>خطة التدريب الشخصية</h4>
               <p style={{ fontSize: '0.85rem', color: 'var(--label-2)', margin: '0 0 14px 0' }}>أنشئ روتينك الخاص، حدد أيامك، واختر من مكتبة التمارين المفتوحة (5,600+ تمرين).</p>
               <button onClick={() => nav('/plan')} style={{ width: '100%', padding: '10px', borderRadius: 9, background: 'var(--surface-2)', color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer' }}>
                 فتح جدول الروتين الشخصي
@@ -280,7 +280,7 @@ export default function Teams() {
             </div>
 
             <div className="card" style={{ background: 'var(--surface)', padding: 18, borderRadius: 16, border: '1px solid var(--sep-op)' }}>
-              <h4 style={{ margin: '0 0 8px 0', color: 'var(--label)' }}>🥗 التغذية ومتابعة التقدم</h4>
+              <h4 style={{ margin: '0 0 8px 0', color: 'var(--label)' }}>التغذية ومتابعة التقدم</h4>
               <p style={{ fontSize: '0.85rem', color: 'var(--label-2)', margin: '0 0 14px 0' }}>سجل السعرات والماكروز وشرب الماء والنوم وراقب تطور وزنك أسبوعياً.</p>
               <button onClick={() => nav('/nutrition')} style={{ width: '100%', padding: '10px', borderRadius: 9, background: 'var(--surface-2)', color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer' }}>
                 فتح سجل التغذية والقياسات
@@ -308,7 +308,9 @@ export default function Teams() {
 
           {coachedTeams.length === 0 ? (
             <div className="card" style={{ background: 'var(--surface)', padding: 32, borderRadius: 16, textAlign: 'center', border: '1px dashed var(--sep)' }}>
-              <div style={{ fontSize: '2.4rem', marginBottom: 10 }}>🏋️‍♂️</div>
+              <div style={{ width: 48, height: 48, margin: '0 auto 12px', borderRadius: '50%', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)' }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              </div>
               <h4 style={{ margin: '0 0 8px 0', color: 'var(--label)' }}>لم تقم بإنشاء أي فريق بعد</h4>
               <p style={{ fontSize: '0.85rem', color: 'var(--label-2)', margin: '0 0 16px 0' }}>
                 يمكنك إنشاء فريق جديد باسم (مثل: Team Alpha أو أبطال التضخيم) ودعوة المتدربين عبر رابط مباشر أو رمز QR.
@@ -343,13 +345,13 @@ export default function Teams() {
                         }}
                         style={{ padding: '8px 12px', borderRadius: 8, background: 'var(--surface-2)', color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer', fontSize: '0.85rem' }}
                       >
-                        🔗 نسخ الرابط
+                        نسخ الرابط
                       </button>
                       <button
                         onClick={() => setActiveQrTeam(activeQrTeam?.id === team.id ? null : team)}
                         style={{ padding: '8px 12px', borderRadius: 8, background: 'var(--surface-2)', color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer', fontSize: '0.85rem' }}
                       >
-                        📱 رمز QR ({team.invite_code})
+                        رمز QR ({team.invite_code})
                       </button>
                     </div>
                   </div>
@@ -377,19 +379,20 @@ export default function Teams() {
                       onClick={() => nav(`/teams/plan?teamId=${team.id}`)}
                       style={{ flex: 1, minWidth: 160, padding: '10px 14px', borderRadius: 10, background: 'var(--acc)', color: 'var(--on-acc)', border: 'none', fontWeight: 700, cursor: 'pointer' }}
                     >
-                      📋 إدارة البرنامج والتخصيص الفردي
+                      إدارة البرنامج والتخصيص الفردي
                     </button>
                     <button
                       onClick={() => nav(`/coach/live?teamId=${team.id}`)}
-                      style={{ padding: '10px 14px', borderRadius: 10, background: 'var(--surface-2)', color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer', fontWeight: 600 }}
+                      style={{ padding: '10px 14px', borderRadius: 10, background: 'var(--surface-2)', color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}
                     >
-                      🔴 المتابعة الحية
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--red)', animation: 'pulse 1.5s infinite' }} />
+                      المتابعة الحية
                     </button>
                     <button
                       onClick={() => nav(`/chat?type=team&id=${team.id}`)}
                       style={{ padding: '10px 14px', borderRadius: 10, background: 'var(--surface-2)', color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer', fontWeight: 600 }}
                     >
-                      💬 شات الفريق
+                      شات الفريق
                     </button>
                   </div>
                 </div>
@@ -417,7 +420,9 @@ export default function Teams() {
 
           {joinedTeams.length === 0 ? (
             <div className="card" style={{ background: 'var(--surface)', padding: 32, borderRadius: 16, textAlign: 'center', border: '1px dashed var(--sep)' }}>
-              <div style={{ fontSize: '2.4rem', marginBottom: 10 }}>👥</div>
+              <div style={{ width: 48, height: 48, margin: '0 auto 12px', borderRadius: '50%', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--label-2)' }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              </div>
               <h4 style={{ margin: '0 0 8px 0', color: 'var(--label)' }}>لست عضواً في أي فريق حالياً</h4>
               <p style={{ fontSize: '0.85rem', color: 'var(--label-2)', margin: '0 0 16px 0' }}>
                 اطلب رمز الدعوة أو رابط QR من مدربك للانضمام فوراً واستلام برنامجك المخصص.
@@ -449,13 +454,13 @@ export default function Teams() {
                       onClick={() => nav('/workout')}
                       style={{ flex: 1, padding: '10px 14px', borderRadius: 10, background: 'var(--acc)', color: 'var(--on-acc)', border: 'none', fontWeight: 700, cursor: 'pointer' }}
                     >
-                      🚀 بدء تمرين اليوم المخصص لي
+                      بدء تمرين اليوم المخصص لي
                     </button>
                     <button
                       onClick={() => nav(`/chat?type=team&id=${team.id}`)}
                       style={{ padding: '10px 14px', borderRadius: 10, background: 'var(--surface-2)', color: 'var(--label)', border: '1px solid var(--sep-op)', cursor: 'pointer', fontWeight: 600 }}
                     >
-                      💬 محادثة المجموعة
+                      محادثة المجموعة
                     </button>
                   </div>
                 </div>
@@ -553,3 +558,4 @@ export default function Teams() {
     </div>
   )
 }
+

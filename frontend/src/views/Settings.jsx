@@ -1061,7 +1061,7 @@ export default function Settings({ page = null, find = null, via = null, entryKe
       })}
       {/* Christmas: the advent calendar, for all of December (lib/advent.js), from the theme's chunk. */}
       {activeSeason(S) === 'christmas' && adventOpenable() && <Section>
-        <Row icon="calendar" iconTint="var(--green)" title={'🎄 ' + t('Advent calendar')}
+        <Row icon="calendar" iconTint="var(--green)" title={t('Advent calendar')}
           subtitle={t('{0} of 24 doors open', adventOf(S).opened.length)} accessory="chevron"
           onClick={() => openSeasonal('christmas', 'advent')} />
       </Section>}

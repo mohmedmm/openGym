@@ -169,4 +169,36 @@ test('Teams Hub & Multi-User Architecture Suite', async (t) => {
     assert.ok(metrics.total_teams >= 1);
     assert.ok(metrics.total_workouts_logged >= 1);
   });
+
+  await t.test('8. Centralized Team Plans & Live Roster Matrix', async () => {
+    const allPlans = await db.getAllTeamPlans('coach_123');
+    assert.ok(Array.isArray(allPlans));
+    assert.ok(allPlans.length >= 1);
+    assert.equal(allPlans[0].team_name, 'أبطال القوة - Team Alpha');
+
+    const liveBoard = await db.getCoachLiveBoard('coach_123');
+    assert.ok(Array.isArray(liveBoard.roster));
+    assert.ok(liveBoard.roster.length >= 1);
+    const member = liveBoard.roster.find(r => r.uid === 'trainee_456');
+    assert.ok(member);
+    assert.equal(member.status, 'completed');
+  });
+
+  await t.test('9. Security hardening verification (BOLA plan owner, chat access control)', async () => {
+    // Check plan owner retrieval
+    const owner = await db.getTeamPlanOwner(createdPlan.id);
+    assert.ok(owner);
+    assert.equal(owner.head_coach_uid, 'coach_123');
+
+    // Access control on team chat
+    const coachHasAccess = await db.canUserAccessChat('coach_123', 'team', createdTeam.id);
+    assert.equal(coachHasAccess, true);
+
+    const traineeHasAccess = await db.canUserAccessChat('trainee_456', 'team', createdTeam.id);
+    assert.equal(traineeHasAccess, true);
+
+    const outsiderAccess = await db.canUserAccessChat('attacker_999', 'team', createdTeam.id);
+    assert.equal(outsiderAccess, false);
+  });
 });
+
