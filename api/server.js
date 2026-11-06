@@ -43,6 +43,8 @@ import { createIntegrations } from './integrations/index.js';
 import { integrationRoutes } from './integrations/routes.js';
 import { excusedOn, nudgeFor, nudgeWindowOpen, toneOf } from './nudge.js';
 import { wrappedPushYear, wrappedSummary, wrappedPushOwed, wrappedPush } from './wrapped.js';
+import { initDb } from './db-pg.js';
+import { createTeamsRouter } from './teams-routes.js';
 
 const PORT = +(process.env.PORT || 3000);
 const DATA = process.env.DATA_DIR || '/data';
@@ -2983,7 +2985,10 @@ const routes = {
   /* ---------- photos & videos ---------- */
   // Absent, not refusing, when MEDIA_UPLOADS=0: a 404 is what a server from before the feature
   // answers, and the client already treats that as "this server does not store them".
-  ...(MEDIA_ON ? mediaRoutes : {})
+  ...(MEDIA_ON ? mediaRoutes : {}),
+
+  /* ---------- teams, coach hub, live board, chat & nutrition ---------- */
+  ...createTeamsRouter({ getUser: readSession, isAdmin, isOwner })
 };
 
 /* ---------- Coach: boot recovery, notifications, scheduled reviews ---------- */
@@ -3123,6 +3128,7 @@ const server = http.createServer(async (req, res) => {
 // every other route's body still has to arrive within five minutes (bodyDeadline above).
 server.requestTimeout = 30 * 60000;
 server.headersTimeout = 60000;
+await initDb().catch(e => console.error('DB init failed:', e));
 // The port is read back off the listener rather than echoed from PORT, so the line states the
 // port that was actually bound: with PORT=0 the OS picks one, and a caller that did not choose it
 // (the tests spawn the server that way, and so does anyone running two instances on one box) has

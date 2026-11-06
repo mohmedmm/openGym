@@ -189,8 +189,8 @@ export function searchScore(exercise, query) {
 const ENV = import.meta.env || {}
 // Under their own folder since v1.4.0: a docker-compose.yml from before then still mounts the old
 // dataset's media over img/ and gif/, and would hide the catalogue's files if they lived there.
-const IMG_BASE = ENV.VITE_IMG_BASE || 'exercise-media/still/'
-const GIF_BASE = ENV.VITE_GIF_BASE || 'exercise-media/clip/'
+const IMG_BASE = ENV.VITE_IMG_BASE || 'https://raw.githubusercontent.com/mohmedmm/openGym/main/catalogue/media/still/'
+const GIF_BASE = ENV.VITE_GIF_BASE || 'https://raw.githubusercontent.com/mohmedmm/openGym/main/catalogue/media/clip/'
 // The animations are MP4 loops, except in the Android release: there they are animated WebP
 // (VITE_CLIP_EXT=webp, staged from APP_MEDIA_DIR), shown as a plain image. The WebView's video
 // player stalled at every loop of these 3-second clips on real phones; an image decodes like the

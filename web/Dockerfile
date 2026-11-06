@@ -75,9 +75,9 @@ COPY web/nginx.conf.template /etc/nginx/templates/default.conf.template
 # before the template rendering at 20.
 COPY --chmod=755 web/05-check-base-path.sh /docker-entrypoint.d/
 COPY --from=build /app/frontend/dist /usr/share/nginx/html
-# The exercise stills and animations, 180 px, licensed from Gym visual for openGym only: see
-# catalogue/media/NOTICE.md. They ship inside the image; nothing is downloaded at start-up.
-COPY catalogue/media/ /usr/share/nginx/html/exercise-media/
+# External CDN media architecture (Zero server bloat per requirement 11):
+# Media files are streamed from CDN/External repository, keeping the local image lean and fast.
+RUN mkdir -p /usr/share/nginx/html/exercise-media/still /usr/share/nginx/html/exercise-media/clip
 
 # Set Default ENVs for nginx
 ENV NGINX_PORT=80

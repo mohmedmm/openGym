@@ -92,6 +92,12 @@ const History = lazyView(() => import('./views/History.jsx'))
 const Library = lazyView(() => import('./views/Library.jsx'))
 const Muscles = lazyView(() => import('./views/Muscles.jsx'))
 const SettingsRoute = lazyView(() => import('./views/Settings.jsx').then(m => ({ default: m.SettingsRoute })))
+const Teams = lazyView(() => import('./views/Teams.jsx'))
+const TeamPlanCustomizer = lazyView(() => import('./views/TeamPlanCustomizer.jsx'))
+const CoachLiveBoard = lazyView(() => import('./views/CoachLiveBoard.jsx'))
+const Nutrition = lazyView(() => import('./views/Nutrition.jsx'))
+const TeamChat = lazyView(() => import('./views/TeamChat.jsx'))
+const SuperAdmin = lazyView(() => import('./views/SuperAdmin.jsx'))
 // The app tour's overlay (components/Tour.jsx): fetched when it opens, never before.
 const Tour = lazy(() => import('./components/Tour.jsx'))
 let viewsPrefetched = false
@@ -357,6 +363,12 @@ function Shell() {
       {isOn(S, 'coach') && <Route path="/coach/intake" element={<CoachIntake />} />}
       {isOn(S, 'coach') && <Route path="/coach/proposal" element={<Navigate to="/coach" replace />} />}
       {isOn(S, 'coach') && <Route path="/coach/setup" element={<CoachSetup />} />}
+      <Route path="/teams" element={<Teams />} />
+      <Route path="/teams/plan" element={<TeamPlanCustomizer />} />
+      <Route path="/coach/live" element={<CoachLiveBoard />} />
+      <Route path="/nutrition" element={<Nutrition />} />
+      <Route path="/chat" element={<TeamChat />} />
+      <Route path="/superadmin" element={user?.admin ? <SuperAdmin /> : <Navigate to="/home" replace />} />
       <Route path="/admin" element={user?.admin ? <Admin /> : <Navigate to="/home" replace />} />
       <Route path="*" element={<Navigate to="/home" replace />} />
     </Routes>

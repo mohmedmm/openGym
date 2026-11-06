@@ -1,0 +1,93 @@
+name: gym-platform
+
+services:
+  # Isolated PostgreSQL Database for Multi-User, Teams, Plans, and Live Tracking
+  db:
+    image: postgres:16-alpine
+    container_name: gym_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gym_nbox
+      POSTGRES_USER: gym_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-gym_secure_pass_2026_libya}
+    volumes:
+      - gym_pgdata:/var/lib/postgresql/data
+    networks:
+      - gym_net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gym_user -d gym_nbox"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API Server
+  api:
+    image: gym_api:latest
+    container_name: gym_api
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - PORT=3000
+      - DATA_DIR=/data
+      - DATABASE_URL=postgres://gym_user:${DB_PASSWORD:-gym_secure_pass_2026_libya}@db:5432/gym_nbox
+      - RP_ID=gym.nbox.ly
+      - ORIGIN=https://gym.nbox.ly
+      - RP_NAME=openGym
+      - PASSWORD_LOGIN=1
+      - DEFAULT_LANG=ar
+      - FIRST_USER_ADMIN=1
+      - TRUST_PROXY=1
+    volumes:
+      - ./data:/data
+    networks:
+      - gym_net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.75'
+          memory: 512M
+
+  # Nginx Frontend Proxy & Web App
+  web:
+    image: gym_web:latest
+    container_name: gym_web
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "127.0.0.1:5080:80"
+    environment:
+      - NGINX_PORT=80
+      - BACKEND=api
+      - PORT=3000
+      - RESOLVER=127.0.0.11
+    networks:
+      - gym_net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
+
+volumes:
+  gym_pgdata:
+    name: gym_pgdata
+
+networks:
+  gym_net:
+    name: gym_net
+    driver: bridge
